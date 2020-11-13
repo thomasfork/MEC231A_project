@@ -92,8 +92,11 @@ class DroneTrack():
             p0, th, phi= self.local_to_global_curvillinear(s, 0, 0, 0, 0)
             n_t, n_h, n_v = self.calc_curvillinar_unit_vectors(th, phi)
             self.waypoints.append([s,p0,np.array([n_t,n_h,n_v]), th, phi])
+        
+        self.waypoint_path_lengths = np.array([way[0] for way in self.waypoints])
         return
-            
+    
+    #based on DroneCoords class       
     def local_to_global(self,data):
         s = data.s
         e_y = data.e_y
@@ -106,6 +109,7 @@ class DroneTrack():
         data.phi = global_phi
         return
     
+    #based on DroneCoords class   
     def global_to_local(self,data):
         p = data.p
         th = data.th
@@ -188,6 +192,33 @@ class DroneTrack():
         e_phi = phi - self.waypoints[idx][4]
         
         return s, e_y, e_z, e_th, e_phi
+    
+    
+    
+    def linearize_boundary_constraints(self, p_interp):
+        '''
+        linearize track constraints about an x,y,z point
+        returns A, bu, bl such that the track constraints are of the form
+        bl <= A @ p <= bu 
+        
+        Not implemented for input s as curvillinear controllers should 
+        use the constant track widths self.w_z and self.w_y
+        '''
+        
+        s,_,_,_,_ = self.global_to_local_waypoint(p_interp, 0, 0)
+        
+        idx = self.s2idx(s)
+        p0 = self.waypoints[idx][1]
+        A = self.waypoints[idx][2]
+        
+        
+        #-self.w_z/2 <= A[:,1] @ (x - p0) <= self.w_z /2
+        
+        b = np.array([10,self.w_y/2, self.w_z/2])
+        bl = -b + A @ p_interp
+        bu =  b + A @ p_interp
+        
+        return bl, A, bu
         
     def calc_curvillinar_unit_vectors(self, th, phi):
         n_t = np.array([np.cos(th) * np.cos(phi), 
@@ -207,7 +238,9 @@ class DroneTrack():
         while s < 0 : s += self.track_length
         while s > self.track_length: s -= self.track_length
         return s
-        
+    
+    def s2idx(self,s):
+        return np.argmax(self.mod_s(s) < self.waypoint_path_lengths) -1     
         
     def plot_map(self,ax, n_segs = 1000):
         
@@ -258,14 +291,7 @@ class DroneTrack():
         ax.set_zlim(-80,80)    
         
         
-def main():
-    track = DroneTrack()
-    track.load_default()
-    fig = plt.figure(figsize = (14,7))
-    ax = fig.gca(projection='3d')
-    track.plot_map(ax)
-    plt.show()
-    return
+
 
 def test_reconstruction_accuracy(): # make sure the global <--> local conversions work well
     track = DroneTrack()
@@ -291,9 +317,40 @@ def test_reconstruction_accuracy(): # make sure the global <--> local conversion
     plt.title('Reconstruction errors')
     plt.show()
     return      
+
+def test_constraint_linearization():
+    track = DroneTrack()
+    track.load_default()
+    
+    n_segs = 1000
+    s_interp = np.linspace(100,track.track_length-1e-3,n_segs)
+    errors = []
+    for s in s_interp:
+        p0, _, _ = track.local_to_global_curvillinear(s, 0, 0, 0, 0)
+        p1, _, _ = track.local_to_global_curvillinear(s, track.w_y/2, track.w_z/2, 0, 0)
+        p2, _, _ = track.local_to_global_curvillinear(s, track.w_y/2, -track.w_z/2, 0, 0)
+        p3, _, _ = track.local_to_global_curvillinear(s, -track.w_y/2, track.w_z/2, 0, 0)
+        p4, _, _ = track.local_to_global_curvillinear(s, -track.w_y/2, -track.w_z/2, 0, 0)
+        bl, A, bu = track.linearize_boundary_constraints(p0)
+        
+        check = np.all(bl - 1e-9 <= A @ p1) and np.all(A @ p1 <= bu  +1e-9)
+        errors.append( not check)
+        
+    print('constraint linearization errors: %d'%np.sum(np.array(errors)))
+        
+def main():
+    track = DroneTrack()
+    track.load_default()
+    fig = plt.figure(figsize = (14,7))
+    ax = fig.gca(projection='3d')
+    track.plot_map(ax)
+    plt.show()
+    return       
+        
+    
     
 if __name__ == '__main__':
-    main()
-    main()
-    test_reconstruction_accuracy()
+    #main()
+    #test_reconstruction_accuracy()
+    test_constraint_linearization()
         

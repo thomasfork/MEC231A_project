@@ -201,7 +201,6 @@ def run_LQR_raceline(drone, track, raceline):
     
     return x_list, u_list, q_list
     
-    return
 
 def run_LMPC(drone, track, x_data, u_data, q_data):
     # lmpc works with affine models rather than linearized affine models so strip the extra datapoint

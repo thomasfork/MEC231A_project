@@ -10,7 +10,7 @@ from matplotlib import pyplot as plt
 
 class MPCUtil():
     '''
-    General purpose MPC utility. Can be used for MPC, LMPC, ATV_MPC, etc...
+    General purpose MPC utility. Can (eventually) be used for MPC, LMPC, ATV_MPC, etc...
     
     '''
 
