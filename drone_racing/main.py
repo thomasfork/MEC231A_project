@@ -419,15 +419,15 @@ def main():
         x_list, u_list, q_list = run_LQR_lap(drone, track)
         np.savez('lqr_data.npz', x_list  =x_list, u_list = u_list, q_list = q_list)
     
-    '''raceline = GlobalRaceline(x_list, u_list, track, window = 1)
     if os.path.exists('lqr_raceline_data.npz'):
         data = np.load('lqr_raceline_data.npz')
         x_raceline = data['x_list']
         u_raceline = data['u_list']
         q_raceline = data['q_list']
     else:
+        raceline = GlobalRaceline(x_list, u_list, track, window = 1)
         x_raceline, u_raceline, q_raceline = run_LQR_raceline(drone, track, raceline)
-        np.savez('lqr_raceline_data.npz', x_list  = x_raceline, u_list = u_raceline, q_list = q_raceline)'''
+        np.savez('lqr_raceline_data.npz', x_list  = x_raceline, u_list = u_raceline, q_list = q_raceline)
     
     run_LMPC(drone, track, x_list, u_list, q_list)
     #run_ugo_LMPC(drone,track, x_list, u_list, q_list)'''
