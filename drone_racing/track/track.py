@@ -194,6 +194,16 @@ class DroneTrack():
         return s, e_y, e_z, e_th, e_phi
     
     
+    def linearize_drone_trajectory_constraints(self, trajectory):
+        bl_list = []
+        A_list  = []
+        bu_list = []
+        for point in trajectory:
+            bl, A, bu = self.linearize_boundary_constraints(numpy.array([point[0], point[4], point[8]]))
+            bl_list.append(bl)
+            A_list.append(A)
+            bu_list.append(bu)
+        return bl_list, A_list, bu_list
     
     def linearize_boundary_constraints(self, p_interp):
         '''

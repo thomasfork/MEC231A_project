@@ -26,6 +26,7 @@ class MPCUtil():
         self.num_mu = self.dim_x
         
         self.last_output = np.zeros((self.dim_u,1))
+        self.last_solution = None
         
         #TODO: These are currently placeholders and may not work if changed
         self.use_ss = True
@@ -42,9 +43,11 @@ class MPCUtil():
         assert B.shape[0] == self.dim_x
         assert B.shape[1] == self.dim_u
         
-        if C is None: C = np.zeors((self.dim_x, 1))
+        if C is None:   
+            C = np.zeros((self.dim_x, 1))
         assert C.shape[0] == self.dim_x
         assert C.shape[1] == 1
+        
         
         self.A = A
         self.B = B
@@ -124,6 +127,9 @@ class MPCUtil():
         self.x0 = x0
         self.xf = xf
         
+        self.u_offset = np.linalg.pinv(self.B) @((np.eye(self.dim_x) - self.A) @ self.xf - self.C)
+        
+        
         return
         
     def build_cost_matrix(self):
@@ -132,17 +138,18 @@ class MPCUtil():
         Mu = sparse.kron(sparse.eye(self.N, k = -1), -self.dR)  +\
              sparse.kron(sparse.eye(self.N, k =  1), -self.dR)  +\
              sparse.kron(sparse.eye(self.N), self.R+2*self.dR)
-        M = 2*sparse.block_diag([Mx, Mu])
+        M = sparse.block_diag([Mx, Mu])
         
         #q = np.zeros((self.num_x,1))
         if self.use_ss:
             q = np.vstack([np.kron(np.ones((self.N,1)), -self.Q @ self.ss_terminal_vecs[:,-1:]), self.P @ self.ss_terminal_vecs[:,-1:]])
         else:
-            q = np.vstack([np.kron(np.ones((self.N,1)), -self.Q @ self.xf), self.P @ self.xf])
+            q = np.vstack([np.kron(np.ones((self.N,1)), -self.Q @ self.xf), -self.P @ self.xf])
         
         #q = np.vstack([q, np.zeros((self.num_u,1))]) 
-        for i in range(self.N):                             #TODO: prior output cost should go here
-            q = np.vstack([q, np.array([[0],[0],[-14]])]) 
+        
+        for i in range(self.N):  #TODO: prior output cost should go here too
+            q = np.vstack([q, -self.R @ self.u_offset]) 
         
         #q = np.vstack([q, -2 * self.dR @ self.last_output])         # untested (thomasfork)
         #q = np.vstack([q, np.zeros((self.dim_u * (self.N-1),1))]) 
@@ -152,11 +159,11 @@ class MPCUtil():
             q = np.vstack([q, self.ss_terminal_q])
         
         if self.use_terminal_slack:
-            M = sparse.block_diag([M, 2*self.Q_mu])
+            M = sparse.block_diag([M, self.Q_mu])
             q = np.vstack([q, np.zeros((self.dim_x,1))])            
             
         if self.use_lane_slack:
-            M = sparse.block_diag([M, 2*self.Q_eps])
+            M = sparse.block_diag([M, self.Q_eps])
             q = np.vstack([q, self.b_eps])    
             
         self.osqp_P = sparse.csc_matrix(M)
@@ -203,11 +210,24 @@ class MPCUtil():
         else:   
             tmp = np.zeros((1,self.N + 1))
             tmp[0,self.N] = 1
-            A_terminal = sparse.kron(tmp, sparse.eye(self.dim_x))
-            A_terminal = sparse.hstack([A_terminal, sparse.csc_matrix((self.dim_x, self.num_u))])
+            A_terminal_x = sparse.kron(tmp, sparse.eye(self.dim_x))
+            tmp = np.zeros((1,self.N))
+            tmp[0,self.N-1] = 1
+            A_terminal_u = sparse.kron(tmp, sparse.eye(self.dim_u))
+            
+            #A_terminal = sparse.hstack([A_terminal_x, sparse.csc_matrix((self.dim_x, self.num_u))])
+            A_terminal = sparse.block_diag([A_terminal_x, A_terminal_u])
             Aeq = sparse.vstack([Aeq, A_terminal])
             
-            leq = np.vstack([leq, self.xf])
+            leq = np.vstack([leq, self.xf, self.u_offset])
+            
+            if self.use_terminal_slack:
+                #TODO: add identity matrix for terminal x
+                tmp = sparse.lil_matrix((Aeq.shape[0], self.dim_x))
+                tmp[self.dim_x * self.N: self.dim_x  *(self.N + 1)] = np.eye(self.dim_x)
+                
+                Aeq = sparse.hstack([Aeq, tmp])
+                
         # upper and lower constraints are identical for equality constraints
         ueq = copy.copy(leq)
         
@@ -302,7 +322,7 @@ class MPCUtil():
         self.build_constraint_matrix()
         
         self.solver = osqp.OSQP()
-        self.solver.setup(P=self.osqp_P, q=self.osqp_q, A=self.osqp_A, l=self.osqp_l, u=self.osqp_u, verbose=True, polish=True)
+        self.solver.setup(P=self.osqp_P, q=self.osqp_q, A=self.osqp_A, l=self.osqp_l, u=self.osqp_u, verbose=False, polish=True)
         return
         
     def setup_MPC(self):
@@ -310,23 +330,24 @@ class MPCUtil():
         self.num_u =         self.N * self.dim_u
         self.index_x =       0                     
         self.index_u =       self.index_x + self.num_x
+        self.index_mu =      self.index_u + self.num_u
         
         self.use_ss = False
-        self.use_terminal_slack = False
+        self.use_terminal_slack = True
         self.use_lane_slack = False
         
         self.build_cost_matrix()
         self.build_constraint_matrix()
         
         self.solver = osqp.OSQP()
-        self.solver.setup(P=self.osqp_P, q=self.osqp_q, A=self.osqp_A, l=self.osqp_l, u=self.osqp_u, verbose=True, polish=True)
+        self.solver.setup(P=self.osqp_P, q=self.osqp_q, A=self.osqp_A, l=self.osqp_l, u=self.osqp_u, verbose=False, polish=True)
         return
         
         
         
         
     def update(self):
-        self.update_ss()
+        if self.use_ss: self.update_ss()
         self.update_x0()
         self.update_model_matrices()
         self.solver.update(q = self.osqp_q, Ax = self.osqp_A.data, l = self.osqp_l ,u = self.osqp_u)
@@ -346,6 +367,13 @@ class MPCUtil():
     def update_x0(self):
         self.osqp_l[0:self.dim_x] = self.x0
         self.osqp_u[0:self.dim_x] = self.x0
+        
+        if not self.use_ss:
+            qn = np.vstack([np.kron(np.ones((self.N,1)), -self.Q @ self.xf), -self.P @ self.xf])
+            
+            self.osqp_q[0:len(qn)] = qn
+            self.osqp_l[self.dim_x * (self.N+1) : self.dim_x*(self.N+2)] = self.xf
+            self.osqp_u[self.dim_x * (self.N+1) : self.dim_x*(self.N+2)] = self.xf
         return
     
     def update_model_matrices(self):
@@ -357,10 +385,24 @@ class MPCUtil():
         self.osqp_A[0:Aeq.shape[0], 0:Aeq.shape[1]] = Aeq
         return
             
+            
+    '''def shift_last_output(self,n):
+        new_x = self.predicted_x.copy()
+        new_x[0:-1] = new_x[1:]
+        new_x = new_x.reshape(1,-1).squeeze()
+        
+        new_u = self.predicted_u.copy()
+        new_u[0:-n] = new_u[n:]
+        new_u = new_u.reshape(1,-1).squeeze()
+        
+        self.last_solution[self.index_x: self.index_x + self.num_x] = new_x
+        self.last_solution[self.index_u: self.index_u + self.num_u] = new_u'''
+            
     def solve(self, init_vals = None):
         if init_vals is not None:
             self.solver.warm_start(x=init_vals)
-        
+        elif self.last_solution is not None:
+            self.solver.warm_start(x = self.last_solution)
         
         z0 = np.vstack([self.x0, self.ss_terminal_vecs[:,0:self.N].reshape(-1,1)])
         z0 = np.vstack([z0, np.zeros((self.osqp_P.shape[0] - z0.shape[0],1))])
@@ -372,12 +414,14 @@ class MPCUtil():
         if self.osqp_feasible:
             self.unpack_results(res)
         else:
-            print('Ineasible OSQP')
-        return
+            print('Infeasible OSQP')
+            return -1
+        return 0 
         
     def unpack_results(self,res):
         num_x = self.dim_x * (self.N + 1)
         num_u = self.dim_u * self.N
+        self.last_solution = res.x
         self.predicted_x = np.reshape(res.x[self.index_x:self.index_x + self.num_x], (self.N+1, self.dim_x))
         self.predicted_u = np.reshape(res.x[self.index_u:self.index_u + self.num_u], (self.N, self.dim_u))
         

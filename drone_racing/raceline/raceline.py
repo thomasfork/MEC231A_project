@@ -1,5 +1,6 @@
 import numpy as np
 from abc import abstractmethod
+import time
 
 class BaseRaceline():
     
@@ -29,13 +30,15 @@ class GlobalRaceline(BaseRaceline):
         
         assert x_data.shape[0] == u_data.shape[0]
         s_data = []
+        t0 = time.time()
         for i in range(x_data.shape[0]):
             p = x_data[i,[0,4,8]]
             
             s, _, _, _, _ = self.track.global_to_local_waypoint(p,0,0)
             s_data.append(s)
         s_data = np.array(s_data)
-        
+        dt = time.time() - t0
+        print('converted %d raceline points in %0.3f seconds'%(x_data.shape[0], dt))
         self.x_data = x_data
         self.u_data = u_data
         self.s_data = s_data

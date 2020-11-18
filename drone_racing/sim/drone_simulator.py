@@ -43,12 +43,12 @@ class DroneSim():
         B[3,0] = 0.9921
         B[6,1] = 0.01
         B[7,1] = 0.9921
-        B[8,2] = -0.00021875
-        B[9,2] = -0.0175
+        B[8,2] = 0.00021875
+        B[9,2] = 0.0175
 
         c = np.zeros((10,1))
-        c[8,0] = 0.0031
-        c[9,0] = 0.2453
+        c[8,0] = -0.0031
+        c[9,0] = -0.2453
 
         C = linalg.block_diag(*([np.array([1,0])] * 5))
         D = np.zeros((3,3))
@@ -69,7 +69,7 @@ class DroneSim():
         #P = linalg.solve_discrete_are(self.A,self.B,Q,R)
         P = self.solve_discrete_are(self.A,self.B,Q,R)
         K = np.linalg.inv(R + self.B.T @ P @ self.B) @ self.B.T @ P @ self.A
-        return K
+        return P,K
     
     def solve_discrete_are(self,A,B,Q,R, eps = 1e-3):
         P = np.zeros(Q.shape)
