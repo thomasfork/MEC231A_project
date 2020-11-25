@@ -142,17 +142,14 @@ class MPCUtil():
         
         #q = np.zeros((self.num_x,1))
         if self.use_ss:
-            q = np.vstack([np.kron(np.ones((self.N,1)), -self.Q @ self.ss_terminal_vecs[:,-1:]), self.P @ self.ss_terminal_vecs[:,-1:]])
+            q = np.vstack([np.kron(np.ones((self.N,1)), -self.Q @ self.ss_terminal_vecs[:,-1:]), -self.P @ self.ss_terminal_vecs[:,-1:]])
         else:
             q = np.vstack([np.kron(np.ones((self.N,1)), -self.Q @ self.xf), -self.P @ self.xf])
         
         #q = np.vstack([q, np.zeros((self.num_u,1))]) 
         
-        for i in range(self.N):  #TODO: prior output cost should go here too
+        for i in range(self.N):  #TODO: prior output dR cost should go here too
             q = np.vstack([q, -self.R @ self.u_offset]) 
-        
-        #q = np.vstack([q, -2 * self.dR @ self.last_output])         # untested (thomasfork)
-        #q = np.vstack([q, np.zeros((self.dim_u * (self.N-1),1))]) 
         
         if self.use_ss: 
             M = sparse.block_diag([M, sparse.csc_matrix((self.num_lambda, self.num_lambda))])
@@ -356,12 +353,14 @@ class MPCUtil():
     def update_ss(self):
         if not self.use_ss:
             return
-        num_x = self.dim_x * (self.N + 1)
-        num_u = self.dim_u * self.N
-        self.osqp_q[num_x + num_u: num_x + num_u + self.num_ss] = self.ss_terminal_q
+            
+        self.osqp_q[self.index_lambda : self.index_lambda + self.num_ss] = self.ss_terminal_q
         self.osqp_A = sparse.lil_matrix(self.osqp_A)
-        self.osqp_A[num_x + num_u :num_x+num_u + self.dim_x, num_x+num_u : num_x+num_u + self.num_ss] = self.ss_terminal_vecs
+        self.osqp_A[self.index_lambda : self.index_lambda + self.dim_x, self.index_lambda : self.index_lambda + self.num_ss] = self.ss_terminal_vecs
         self.osqp_A = sparse.csc_matrix(self.osqp_A)
+        
+        tmp = np.vstack([np.kron(np.ones((self.N,1)), -self.Q @ self.ss_terminal_vecs[:,-1:]), -self.P @ self.ss_terminal_vecs[:,-1:]])
+        self.osqp_q[0:tmp.shape[0]] = tmp
         return
     
     def update_x0(self):
@@ -416,7 +415,7 @@ class MPCUtil():
         else:
             print('Infeasible OSQP')
             return -1
-        return 0 
+        return 1
         
     def unpack_results(self,res):
         num_x = self.dim_x * (self.N + 1)

@@ -38,7 +38,6 @@ class GlobalRaceline(BaseRaceline):
             s_data.append(s)
         s_data = np.array(s_data)
         dt = time.time() - t0
-        print('converted %d raceline points in %0.3f seconds'%(x_data.shape[0], dt))
         self.x_data = x_data
         self.u_data = u_data
         self.s_data = s_data
