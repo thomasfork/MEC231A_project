@@ -94,6 +94,7 @@ class DroneTrack():
             self.waypoints.append([s,p0,np.array([n_t,n_h,n_v]), th, phi])
         
         self.waypoint_path_lengths = np.array([way[0] for way in self.waypoints])
+        self.p_list = np.array([waypoint[1] for waypoint in self.waypoints])
         return
     
     #based on DroneCoords class       
@@ -173,9 +174,7 @@ class DroneTrack():
         return global_p, global_th, global_phi
     
     def global_to_local_waypoint(self, p_interp, th, phi):
-        p_list = np.array([waypoint[1] for waypoint in self.waypoints])
-        #pdb.set_trace()
-        idx = np.argmin( np.linalg.norm(p_list - p_interp, axis=1) )
+        idx = np.argmin( np.linalg.norm(self.p_list - p_interp, axis=1) )
     
         p0 = self.waypoints[idx][1]
         
@@ -192,20 +191,9 @@ class DroneTrack():
         e_phi = phi - self.waypoints[idx][4]
         
         return s, e_y, e_z, e_th, e_phi
+
     
-    
-    def linearize_drone_trajectory_constraints(self, trajectory):
-        bl_list = []
-        A_list  = []
-        bu_list = []
-        for point in trajectory:
-            bl, A, bu = self.linearize_boundary_constraints(numpy.array([point[0], point[4], point[8]]))
-            bl_list.append(bl)
-            A_list.append(A)
-            bu_list.append(bu)
-        return bl_list, A_list, bu_list
-    
-    def linearize_boundary_constraints(self, p_interp):
+    def linearize_boundary_constraints(self, p_interp, margin = 0.25):
         '''
         linearize track constraints about an x,y,z point
         returns A, bu, bl such that the track constraints are of the form
@@ -224,11 +212,16 @@ class DroneTrack():
         
         #-self.w_z/2 <= A[:,1] @ (x - p0) <= self.w_z /2
         
-        b = np.array([10,self.w_y/2, self.w_z/2])
-        bl = -b + A @ p_interp
-        bu =  b + A @ p_interp
+        b = np.array([10,self.w_y/2 - margin, self.w_z/2 - margin])  #"10" is a dummy value for a constraint bound in the direction of the track 
+        bl = -b + A @ p0
+        bu =  b + A @ p0
         
         return bl, A, bu
+    
+    def inside_track(self,p):
+        _,ey,ez,_,_ = self.global_to_local_waypoint(p, 0, 0)
+        
+        return not ( abs(ey) > self.w_y/2 or abs(ez) > self.w_z/2 ) 
         
     def calc_curvillinar_unit_vectors(self, th, phi):
         n_t = np.array([np.cos(th) * np.cos(phi), 

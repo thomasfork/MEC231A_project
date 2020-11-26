@@ -6,7 +6,7 @@ import pdb
 #from compatibility_lib.cleaned_LMPC.local_linearization import PredictiveModel
 import copy
 from matplotlib import pyplot as plt
-
+import time
 
 class MPCUtil():
     '''
@@ -15,7 +15,7 @@ class MPCUtil():
     '''
 
 
-    def __init__(self, N, dim_x, dim_u, num_ss = 50):
+    def __init__(self, N, dim_x, dim_u, num_ss = 50, track = None):
         #support for non-LMPC is not yet implemented
         self.N = N
         self.dim_x = dim_x
@@ -25,15 +25,23 @@ class MPCUtil():
         self.num_eps = self.N
         self.num_mu = self.dim_x
         
+        self.track = track
+        
         self.last_output = np.zeros((self.dim_u,1))
         self.last_solution = None
         
+        self.predicted_x = np.zeros((self.N+1, self.dim_x))
+        self.predicted_u = np.zeros((self.N, self.dim_u))
+        
         #TODO: These are currently placeholders and may not work if changed
+        # They are also overwritten by setup() and setup_MPC()
         self.use_ss = True
         self.use_terminal_slack = True
         self.use_lane_slack = True
         self.use_affine = True
-        self.use_time_varying = False
+        self.use_time_varying = False  # not implemented - no time varying models used
+        self.use_track_constraints = False  
+        
         return
 
 
@@ -221,8 +229,7 @@ class MPCUtil():
             if self.use_terminal_slack:
                 #TODO: add identity matrix for terminal x
                 tmp = sparse.lil_matrix((Aeq.shape[0], self.dim_x))
-                tmp[self.dim_x * self.N: self.dim_x  *(self.N + 1)] = np.eye(self.dim_x)
-                
+                tmp[self.dim_x * (self.N+1): self.dim_x  *(self.N + 2)] = np.eye(self.dim_x)   # add slack to terminal constraint rather than final dynamics
                 Aeq = sparse.hstack([Aeq, tmp])
                 
         # upper and lower constraints are identical for equality constraints
@@ -294,12 +301,53 @@ class MPCUtil():
         l = np.vstack([leq, lineq])
         u = np.vstack([ueq, uineq])
         
-        self.osqp_A = sparse.csc_matrix(A)
+        self.osqp_A = A
         self.osqp_l = l
         self.osqp_u = u
         
+        if self.use_track_constraints: self.add_track_boundaries()
         return
-    
+        
+    def add_track_boundaries(self): #locally linearized lane boundaries
+        '''
+        NOTE: Because OSQP stores the constraint matrix A in terms of A.data rather than A,
+        The first track boundary matrix must contain nonzero elements for every possible element (even though most of them start as 0)
+        Because of this, initial solver setup linearizes with is_placeholder = True (so that all necessary elements are nonzero)
+        
+        Because of this, updates to osqp_A with track boundaries are done by 
+            1. carry out normal updates to osqp_A 
+            2. retrieve osqp_A.data
+            3. modify elements of osqp_A.data that correspond to track boundaries
+            
+        Modifying osqp_l and osqp_u doesn't need this
+        '''
+        if self.track is None:
+            return
+        if not self.use_track_constraints:
+            return
+            
+        bx_l, Ax, bx_u = self.linearize_track_boundaries(is_placeholder = True) 
+        bl = np.concatenate(bx_l)[None].T
+        bu = np.concatenate(bx_u)[None].T
+        A  = sparse.block_diag(Ax)
+        pad_x = self.osqp_A.shape[1] - A.shape[1]
+        A = sparse.hstack([A, sparse.csc_matrix((A.shape[0], pad_x))])
+        
+        
+        self.track_boundary_data_index = len(self.osqp_A.data)
+        self.track_boundary_constraint_index = self.osqp_A.shape[0]
+        
+        #print(len(self.osqp_A.data))
+        self.osqp_A = sparse.vstack([self.osqp_A, A])
+        #print(len(self.osqp_A.data))
+        #pdb.set_trace()
+        
+        self.osqp_l = np.vstack([self.osqp_l,bl])
+        self.osqp_u = np.vstack([self.osqp_u,bu])
+        
+        return     
+        
+         
     def setup(self):
         self.num_x =         (self.N + 1) * self.dim_x     
         self.num_u =         self.N * self.dim_u
@@ -313,13 +361,12 @@ class MPCUtil():
         self.use_ss = True
         self.use_terminal_slack = False
         self.use_lane_slack = False
-        
+        self.use_track_constraints = False
         
         self.build_cost_matrix()
         self.build_constraint_matrix()
         
-        self.solver = osqp.OSQP()
-        self.solver.setup(P=self.osqp_P, q=self.osqp_q, A=self.osqp_A, l=self.osqp_l, u=self.osqp_u, verbose=False, polish=True)
+        self.create_solver()
         return
         
     def setup_MPC(self):
@@ -332,25 +379,46 @@ class MPCUtil():
         self.use_ss = False
         self.use_terminal_slack = True
         self.use_lane_slack = False
+        self.use_track_constraints = True
         
         self.build_cost_matrix()
         self.build_constraint_matrix()
         
-        self.solver = osqp.OSQP()
-        self.solver.setup(P=self.osqp_P, q=self.osqp_q, A=self.osqp_A, l=self.osqp_l, u=self.osqp_u, verbose=False, polish=True)
+        self.create_solver()
         return
         
-        
+    
+    def create_solver(self):
+        self.solver = osqp.OSQP()
+        self.osqp_A = sparse.csc_matrix(self.osqp_A)
+        self.osqp_P = sparse.csc_matrix(self.osqp_P)
+        self.solver.setup(P=self.osqp_P, q=self.osqp_q, A=self.osqp_A, l=self.osqp_l, u=self.osqp_u, verbose=False, polish=True)   
+        return 
         
         
     def update(self):
-        if self.use_ss: self.update_ss()
+        A_data = self.osqp_A.data
+        
+        #if self.use_ss: self.update_ss()  #Disabled due to sparse data indexing bug
         self.update_x0()
-        self.update_model_matrices()
-        self.solver.update(q = self.osqp_q, Ax = self.osqp_A.data, l = self.osqp_l ,u = self.osqp_u)
+        #self.update_model_matrices()   #Disabled due ot sparse data indexing bug
+        
+        if self.use_track_constraints: 
+            self.update_track_boundaries()
+            #modify A.data directly since that's how OSQP operates
+            idx = self.track_boundary_data_index
+            idxh = idx + len(self.new_track_boundary_data)
+            
+            ins_idxs = np.argwhere(self.osqp_A.indices >= self.track_boundary_constraint_index)
+            #pdb.set_trace()
+            
+            A_data[ins_idxs] = np.expand_dims(self.new_track_boundary_data,1)
+        
+        
+        self.solver.update(q = self.osqp_q, Ax = A_data, l = self.osqp_l, u = self.osqp_u)
         return
         
-    def update_ss(self):
+    def update_ss(self):  # TODO: Fix sparse data indexing bug
         if not self.use_ss:
             return
             
@@ -375,7 +443,7 @@ class MPCUtil():
             self.osqp_u[self.dim_x * (self.N+1) : self.dim_x*(self.N+2)] = self.xf
         return
     
-    def update_model_matrices(self):
+    def update_model_matrices(self): #TODO: Fix sparse data indexing bug
         Ax = sparse.kron(sparse.eye(self.N+1),sparse.eye(self.dim_x)) + \
              sparse.kron(sparse.eye(self.N+1, k=-1), -self.A)                #TODO: Implement time varying case
         Au = sparse.kron(sparse.vstack([sparse.csc_matrix((1, self.N)), sparse.eye(self.N)]), -self.B)
@@ -384,19 +452,70 @@ class MPCUtil():
         self.osqp_A[0:Aeq.shape[0], 0:Aeq.shape[1]] = Aeq
         return
             
-            
-    '''def shift_last_output(self,n):
-        new_x = self.predicted_x.copy()
-        new_x[0:-1] = new_x[1:]
-        new_x = new_x.reshape(1,-1).squeeze()
+    def update_track_boundaries(self): #locally linearized lane boundaries
+        if self.track is None:
+            return
+        if not self.use_track_constraints:
+            return
+           
+        bx_l, Ax, bx_u = self.linearize_track_boundaries() 
+        bl = np.concatenate(bx_l)[None].T
+        bu = np.concatenate(bx_u)[None].T
+        A  = sparse.block_diag(Ax)
+        pad_x = self.osqp_A.shape[1] - A.shape[1]
+        A = sparse.hstack([A, sparse.csc_matrix((A.shape[0], pad_x))])
         
-        new_u = self.predicted_u.copy()
-        new_u[0:-n] = new_u[n:]
-        new_u = new_u.reshape(1,-1).squeeze()
+        # NOTE: This doesn't work because OSQP updates use A.data not A, so we must modify the elements of A.data whenever some elements may become zero!
+        #self.osqp_A[self.track_boundary_constraint_index:,:] = A    
         
-        self.last_solution[self.index_x: self.index_x + self.num_x] = new_x
-        self.last_solution[self.index_u: self.index_u + self.num_u] = new_u'''
+        #instead we store the significant values of the updated matrix A and self.update() inserts them into 
+        new_A_data = []
+        for mat in Ax:
+            #pdb.set_trace()
             
+            new_A_data.append(np.concatenate(mat[:,[0,4,8]].T))
+        self.new_track_boundary_data = np.concatenate(new_A_data)
+        
+        
+        #diff = self.osqp_A.data[self.track_boundary_data_index:] - self.new_track_boundary_data
+        #pdb.set_trace()
+        
+        self.osqp_l[self.track_boundary_constraint_index:]   = bl
+        self.osqp_u[self.track_boundary_constraint_index:]   = bu
+        return
+        
+    def linearize_track_boundaries(self, is_placeholder = False):
+        ''' 
+        is_placeholder:
+        perturbs Ax such that all necessary elements are nonzero
+        This is to make sure all indicies that might be necessary to formulate lane contraints are initialized in osqp
+        '''
+        if self.track is None:
+            return None, None, None
+        if not self.use_track_constraints:
+            return None, None, None
+        
+        bx_l = []
+        Ax   = []
+        bx_u = []
+        for i in range(self.predicted_x.shape[0]):
+            p = np.array(self.predicted_x[i,[0,4,8]])
+            bl,A,bu = self.track.linearize_boundary_constraints(p)
+            
+            if is_placeholder: A[A==0] = 0.001
+            
+            Aexp = np.zeros((3,self.dim_x))
+            Aexp[:,[0,4,8]] = A
+            
+            Aexp = Aexp[1:,:]
+            bl = bl[1:]
+            bu = bu[1:]
+            
+            bx_l.append(bl)
+            Ax.append(Aexp)
+            bx_u.append(bu)
+        return bx_l, Ax, bx_u
+                
     def solve(self, init_vals = None):
         if init_vals is not None:
             self.solver.warm_start(x=init_vals)
