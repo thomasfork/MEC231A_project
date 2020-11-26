@@ -277,6 +277,7 @@ def run_MPC(drone, track, raceline, show_plots = True):
     p = np.array([x[0], x[4], x[8]]).squeeze()
     s, e_y, e_z, e_th, e_phi = track.global_to_local_waypoint(p, 0, 0)
     x_tar, u_tar, s_tar = raceline.update_target(s) 
+    #x_tar, u_tar, s_tar = raceline.update_p_target(p) 
     x_tar = x_tar[0:dim_x]
     
     m = LMPC.MPCUtil(N, dim_x, dim_u, num_ss = num_ss, track = track)
@@ -313,6 +314,7 @@ def run_MPC(drone, track, raceline, show_plots = True):
         
     while s_tar  < track.track_length:
         x_tar, u_tar, s_tar = raceline.update_target(s) 
+        #x_tar, u_tar, s_tar = raceline.update_p_target(p) 
         x_tar = x_tar[0:dim_x]
         
         if m.solve() == -1:
@@ -342,7 +344,7 @@ def run_MPC(drone, track, raceline, show_plots = True):
         m.update()   
         
         
-        if itr % 100 == 0 and show_plots:
+        if itr % 10 == 0 and show_plots:
             fig.canvas.restore_region(bg)
             
             
@@ -622,6 +624,7 @@ def main():
         u_mpc = data['u']
         q_mpc = data['q']
     else:
+        lqr_raceline.p_window = 70
         lqr_raceline.window = 20
         x_mpc, u_mpc, q_mpc = run_MPC(drone, track, lqr_raceline)
         np.savez('mpc_data.npz', x  = x_mpc, u = u_mpc, q = q_mpc)

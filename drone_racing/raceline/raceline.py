@@ -1,6 +1,7 @@
 import numpy as np
 from abc import abstractmethod
 import time
+import pdb
 
 class BaseRaceline():
     
@@ -17,8 +18,8 @@ class GlobalRaceline(BaseRaceline):
         if window is None:
             window = track.track_length  / 100
         
-        
         self.window = window
+        self.p_window = window
         self.track = track
         
         self.load_raceline(x_data, u_data)
@@ -41,11 +42,24 @@ class GlobalRaceline(BaseRaceline):
         self.x_data = x_data
         self.u_data = u_data
         self.s_data = s_data
+        self.p_data = x_data[:,[0,4,8]]
+        
         return
     
     def update_target(self,s):
+        # this works ok but is conservative at inside corners
         return self.get_raceline(s + self.window)
-    
+        
+    def update_p_target(self,p):
+        # this works ok as well but also leaves much to be desired 
+        idx = np.argmin(np.linalg.norm(self.p_data - p,axis = 1))
+        idx += self.p_window
+        if idx > len(self.u_data):
+            idx -= len(self.u_data)
+        #if idx > 1600:
+        #    pdb.set_trace()
+            
+        return np.array([self.x_data[idx]]).T, np.array([self.u_data[idx]]).T, self.s_data[idx] + self.window
     
     def get_raceline(self,s):
         idx = self.s2idx(s)
