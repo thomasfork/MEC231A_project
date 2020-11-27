@@ -197,13 +197,22 @@ class MPCUtil():
         #  weights must also sum to zero
         if self.use_ss:
             temp_Aeq_height = Aeq.shape[0]
+            
+            # remove any zero elements in the safe set so that all entries are given a spot in sparse matrix osqp_A and can be updated (only has to be done for setup)
+            self.ss_terminal_vecs[self.ss_terminal_vecs == 0] = 1e-6
+            
             if self.use_terminal_slack:
 
                 A_lambda = np.vstack((np.hstack((self.ss_terminal_vecs, -np.eye(self.dim_x))), np.hstack((np.ones((1,self.num_ss)), np.zeros((1,self.dim_x))))))
             else:
                 A_lambda = sparse.vstack([self.ss_terminal_vecs, np.ones((1,self.num_ss))])
             
+            self.ss_start_row = Aeq.shape[0]  # store row/col numbers to find sparse indices that correspond to safe set vectors
+            self.ss_start_col = Aeq.shape[1]
             Aeq = sparse.block_diag((Aeq,A_lambda))
+            self.ss_stop_row = self.ss_start_row + self.dim_x
+            self.ss_stop_col = self.ss_start_col + self.num_ss 
+            
             Aeq = sparse.lil_matrix(Aeq)
         #  finish terminal point constraint - sum of weights and slack variables must equal x_N
             Aeq[temp_Aeq_height: temp_Aeq_height + self.dim_x, self.dim_x * self.N: self.dim_x * (self.N+1)] = -sparse.eye(self.dim_x)
@@ -243,23 +252,10 @@ class MPCUtil():
         assert Aeq.shape[0] == ueq.shape[0]     
 
         #Inequality constraints:
-        # state constraints
-        '''if self.use_ss:
-            #  no state constraint for x_N since it is handleded by safe set constraint
-            Aineq = sparse.block_diag(([self.Fx]*self.N))  #, sparse.csc_matrix((self.dim_x,self.dim_x))))
-            Aineq = sparse.hstack([Aineq, sparse.csc_matrix((Aineq.shape[0],self.dim_x))])
-           
-        else:'''
-        
+        # global state constraints - predominantly for speed constraints. 
         Aineq = sparse.block_diag(([self.Fx]*(self.N+1)))
         lineq = np.kron(np.ones((self.N+1,1)), self.bx_l)
         uineq = np.kron(np.ones((self.N+1,1)), self.bx_u)
-
-        # generate upper and lower bounds
-        '''if self.use_ss:
-            lineq = np.kron(np.ones((self.N,1)), self.bx_l)
-            uineq = np.kron(np.ones((self.N,1)), self.bx_u)
-        else:'''
         
         assert Aineq.shape[0] == lineq.shape[0]  
         
@@ -297,7 +293,7 @@ class MPCUtil():
         assert Aineq.shape[0] == lineq.shape[0]  
         
         # - OSQP constraints
-        A = sparse.vstack([Aeq, Aineq], format='csc')
+        A = sparse.vstack([Aeq, Aineq])
         l = np.vstack([leq, lineq])
         u = np.vstack([ueq, uineq])
         
@@ -305,7 +301,21 @@ class MPCUtil():
         self.osqp_l = l
         self.osqp_u = u
         
+        
         if self.use_track_constraints: self.add_track_boundaries()
+        
+        self.osqp_A = sparse.csc_matrix(self.osqp_A)
+        
+        # find indices for any part of osqp_A that may need to be updated:
+        if self.use_ss : 
+            ss_idxptrs = np.arange(self.osqp_A.indptr[self.ss_start_col], self.osqp_A.indptr[self.ss_stop_col])
+            ss_idxptr_rows = self.osqp_A.indices[ss_idxptrs]
+            ss_idxs = ss_idxptrs[np.argwhere(np.logical_and(ss_idxptr_rows >= self.ss_start_row, ss_idxptr_rows < self.ss_stop_row))]
+            
+            self.ss_vec_idxs = ss_idxs
+            
+        if self.use_track_constraints: self.track_boundary_idxs = np.argwhere(np.logical_and(self.osqp_A.indices >= self.boundary_start_row , self.osqp_A.indices < self.boundary_stop_row))
+        
         return
         
     def add_track_boundaries(self): #locally linearized lane boundaries
@@ -334,13 +344,10 @@ class MPCUtil():
         A = sparse.hstack([A, sparse.csc_matrix((A.shape[0], pad_x))])
         
         
-        self.track_boundary_data_index = len(self.osqp_A.data)
-        self.track_boundary_constraint_index = self.osqp_A.shape[0]
         
-        #print(len(self.osqp_A.data))
+        self.boundary_start_row = self.osqp_A.shape[0]  #needed to find indices that correspond to boundary constraints once osqp_A is fully built
         self.osqp_A = sparse.vstack([self.osqp_A, A])
-        #print(len(self.osqp_A.data))
-        #pdb.set_trace()
+        self.boundary_stop_row  = self.osqp_A.shape[0]  #needed to find indices that correspond to boundary constraints 
         
         self.osqp_l = np.vstack([self.osqp_l,bl])
         self.osqp_u = np.vstack([self.osqp_u,bu])
@@ -359,9 +366,9 @@ class MPCUtil():
         self.index_eps =     self.index_mu + self.num_mu
         
         self.use_ss = True
-        self.use_terminal_slack = False
+        self.use_terminal_slack = True
         self.use_lane_slack = False
-        self.use_track_constraints = False
+        self.use_track_constraints = True
         
         self.build_cost_matrix()
         self.build_constraint_matrix()
@@ -397,35 +404,34 @@ class MPCUtil():
         
         
     def update(self):
-        A_data = self.osqp_A.data
+        '''
+        Used to update the OSQP solver without rebuilding it completely. 
+        For q, l, and u, this is as simple as modifying the numpy array and passing it to self.solver.update
+        for P and A, this is quite complicated - self.osqp_A.data must be modified and passed to self.solver.update
+        To ensure that all necessary entries are present in self.osqp_A and the OSQP solver:
+           1. Functions for setting up OSQP must ensure that all possible nonzero entries are initially nonzero (even if small, e.g. 1e-6) 
+           2. self.osqp_A must not be converted to/from anything once set up - this is to avoid automatic removal of zero entries
+           3. self.osqp_A should only be modified by changing self.osqp_A.data, for instance in safe set and track constraint functions (see these for examples)
         
-        #if self.use_ss: self.update_ss()  #Disabled due to sparse data indexing bug
+        CSC matrices store data in compressed column format - meaning indices are ordered first by column, then by row
+        read scipy documentation for more detail. 
+        '''
+        if self.use_ss: self.update_ss()  #Disabled due to sparse data indexing bug
         self.update_x0()
-        #self.update_model_matrices()   #Disabled due ot sparse data indexing bug
+        #self.update_model_matrices()   #Disabled due to sparse data indexing bug
         
-        if self.use_track_constraints: 
-            self.update_track_boundaries()
-            #modify A.data directly since that's how OSQP operates
-            idx = self.track_boundary_data_index
-            idxh = idx + len(self.new_track_boundary_data)
-            
-            ins_idxs = np.argwhere(self.osqp_A.indices >= self.track_boundary_constraint_index)
-            #pdb.set_trace()
-            
-            A_data[ins_idxs] = np.expand_dims(self.new_track_boundary_data,1)
+        if self.use_track_constraints: self.update_track_boundaries()
         
-        
-        self.solver.update(q = self.osqp_q, Ax = A_data, l = self.osqp_l, u = self.osqp_u)
+        self.solver.update(q = self.osqp_q, Ax = self.osqp_A.data, l = self.osqp_l, u = self.osqp_u)
         return
         
-    def update_ss(self):  # TODO: Fix sparse data indexing bug
+    def update_ss(self):
         if not self.use_ss:
             return
-            
         self.osqp_q[self.index_lambda : self.index_lambda + self.num_ss] = self.ss_terminal_q
-        self.osqp_A = sparse.lil_matrix(self.osqp_A)
-        self.osqp_A[self.index_lambda : self.index_lambda + self.dim_x, self.index_lambda : self.index_lambda + self.num_ss] = self.ss_terminal_vecs
-        self.osqp_A = sparse.csc_matrix(self.osqp_A)
+        
+        new_ss_vec_data = np.concatenate(self.ss_terminal_vecs.T)
+        self.osqp_A.data[self.ss_vec_idxs] = np.expand_dims(new_ss_vec_data,1)
         
         tmp = np.vstack([np.kron(np.ones((self.N,1)), -self.Q @ self.ss_terminal_vecs[:,-1:]), -self.P @ self.ss_terminal_vecs[:,-1:]])
         self.osqp_q[0:tmp.shape[0]] = tmp
@@ -465,23 +471,15 @@ class MPCUtil():
         pad_x = self.osqp_A.shape[1] - A.shape[1]
         A = sparse.hstack([A, sparse.csc_matrix((A.shape[0], pad_x))])
         
-        # NOTE: This doesn't work because OSQP updates use A.data not A, so we must modify the elements of A.data whenever some elements may become zero!
-        #self.osqp_A[self.track_boundary_constraint_index:,:] = A    
-        
-        #instead we store the significant values of the updated matrix A and self.update() inserts them into 
         new_A_data = []
         for mat in Ax:
-            #pdb.set_trace()
-            
             new_A_data.append(np.concatenate(mat[:,[0,4,8]].T))
-        self.new_track_boundary_data = np.concatenate(new_A_data)
+        new_track_boundary_data = np.concatenate(new_A_data)
         
+        self.osqp_A.data[self.track_boundary_idxs] = np.expand_dims(new_track_boundary_data,1)
         
-        #diff = self.osqp_A.data[self.track_boundary_data_index:] - self.new_track_boundary_data
-        #pdb.set_trace()
-        
-        self.osqp_l[self.track_boundary_constraint_index:]   = bl
-        self.osqp_u[self.track_boundary_constraint_index:]   = bu
+        self.osqp_l[self.boundary_start_row:]   = bl
+        self.osqp_u[self.boundary_start_row:]   = bu
         return
         
     def linearize_track_boundaries(self, is_placeholder = False):
@@ -499,7 +497,11 @@ class MPCUtil():
         Ax   = []
         bx_u = []
         for i in range(self.predicted_x.shape[0]):
-            p = np.array(self.predicted_x[i,[0,4,8]])
+            if not self.use_ss:
+                p = np.array(self.predicted_x[i,[0,4,8]])
+            else:
+                p = np.array(self.ss_terminal_vecs[[0,4,8],i])
+                
             bl,A,bu = self.track.linearize_boundary_constraints(p)
             
             if is_placeholder: A[A==0] = 0.001

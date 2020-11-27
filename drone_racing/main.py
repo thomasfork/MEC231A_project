@@ -13,6 +13,8 @@ from LMPC import PredictiveModel as ugo_model
 from LMPC import PredictiveControllers as ugo_controller
 
 from raceline.raceline import GlobalRaceline
+from raceline.ss_sampler import SSSampler
+
 import os
 import time
 
@@ -276,6 +278,7 @@ def run_MPC(drone, track, raceline, show_plots = True):
     x = x0.copy()
     p = np.array([x[0], x[4], x[8]]).squeeze()
     s, e_y, e_z, e_th, e_phi = track.global_to_local_waypoint(p, 0, 0)
+    s_prev = s
     x_tar, u_tar, s_tar = raceline.update_target(s) 
     #x_tar, u_tar, s_tar = raceline.update_p_target(p) 
     x_tar = x_tar[0:dim_x]
@@ -311,10 +314,14 @@ def run_MPC(drone, track, raceline, show_plots = True):
                        m.predicted_x[:,4],
                        m.predicted_x[:,8], '-r', linewidth = 2)
         tar = ax.plot([0],[0],[0], 'or',markersize = 12)
-        
-    while s_tar  < track.track_length:
+    
+    lap_done = False
+    lap_halfway = False
+    while not lap_done:
+            
         x_tar, u_tar, s_tar = raceline.update_target(s) 
         #x_tar, u_tar, s_tar = raceline.update_p_target(p) 
+        
         x_tar = x_tar[0:dim_x]
         
         if m.solve() == -1:
@@ -322,13 +329,11 @@ def run_MPC(drone, track, raceline, show_plots = True):
         u = np.array(m.predicted_u[0])
         
         t_list.append(t)
-        
         s_list.append(s)
         e_y_list.append(e_y)
         e_z_list.append(e_z)
         e_th_list.append(e_th)
         e_phi_list.append(e_phi)
-            
         x_list.append(x.squeeze())
         u_list.append(u.squeeze())
         
@@ -336,17 +341,15 @@ def run_MPC(drone, track, raceline, show_plots = True):
         x = drone.A_affine @ x + drone.B_affine @ u[None].T + drone.C_affine
         t += 0.05
         p = np.array([x[0], x[4], x[8]]).squeeze()
-        
+        s_prev = s
         s, e_y, e_z, e_th, e_phi = track.global_to_local_waypoint(p, 0, 0)
         
         m.set_x0(x,x_tar)
-        #m.setup_MPC() 
         m.update()   
         
         
         if itr % 10 == 0 and show_plots:
             fig.canvas.restore_region(bg)
-            
             
             loc[0].set_data(x[0],x[4])
             loc[0].set_3d_properties(x[8]) 
@@ -362,53 +365,49 @@ def run_MPC(drone, track, raceline, show_plots = True):
             fig.canvas.flush_events()
         
         itr += 1
-        #print(np.array([x.T,x_tar.T]))
-        #ptest = x[[0,4,8],0]
-        ptest = m.predicted_x[N-1,[0,4,8]]
         
-        if not track.inside_track(ptest):
+        if not track.inside_track(p):
             print('Warning - out of track boundaries')
-            print('MPC Raceline Progress: (%6.2f/%0.2f)'%(s_tar, track.track_length), end = '\n')
+            print('MPC Raceline Progress: (%6.2f/%0.2f)'%(s, track.track_length), end = '\n')
         else:
-            print('MPC Raceline Progress: (%6.2f/%0.2f)'%(s_tar, track.track_length), end = '\r')
+            print('MPC Raceline Progress: (%6.2f/%0.2f)'%(s, track.track_length), end = '\r')
+        
+        if s > track.track_length/2 and s < 3.0/4*track.track_length:  
+            lap_halfway = True
+        elif lap_halfway:
+            if s < 10:
+                lap_done = True
     
     x_list = np.array(x_list)
     q_list = np.array(t_list)
     q_list = np.flip(q_list)
     u_list = np.array(u_list)
-    
     print('\n* Finished MPC Raceline (%0.2f seconds)*'%t)
-    print('* Ran at ~ %0.2fHz'%(itr/(time.time() - t_start)))
+    #print('* Ran at ~ %0.2fHz'%(itr/(time.time() - t_start)))
     return x_list, u_list, q_list
 
-def run_LMPC(drone, track, x_data, u_data, q_data):
-    # lmpc works with affine models rather than linearized affine models so strip the extra datapoint
-    x_data = x_data[:,:-1]
-    
+def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True):
+    print('* Starting LMPC *')
     N = 30
     num_ss = 45
     dim_x = 10
     dim_u = 3
     
-    Q = np.eye(dim_x) * 0
+    # lmpc works with affine models rather than linearized affine models so strip the extra datapoint if present
+    x_data = x_data[:,:dim_x]
+    
+    Q = np.eye(dim_x) 
     R = np.eye(dim_u) * 0.1
     dR = R * 0 
     P = Q
     
     
-    Q_mu = 1000 * np.eye(dim_x) 
+    Q_mu = 1000000 * np.eye(dim_x) 
     Q_eps = 100 * np.eye(N) 
     b_eps = np.zeros((N,1))
     
-    
-    ss_vecs = x_data.T[:,0:num_ss]
-    ss_q = np.array([q_data]).T[0:num_ss,:]
-    ss_q -= ss_q[-1]
-    ss_q *= 100
-    
-    
     Fx = np.eye(dim_x) 
-    bx_u =  np.array([[200,20,10,50,200,20,10,30,200,10]]).T
+    bx_u =  np.array([[200,50,50,50,200,50,50,50,200,50]]).T
     bx_l = -bx_u.copy()
     
     Fu = np.eye(dim_u) 
@@ -422,7 +421,12 @@ def run_LMPC(drone, track, x_data, u_data, q_data):
     
     x0 = np.zeros((dim_x,1))
     
-    m = LMPC.MPCUtil(N, dim_x, dim_u, num_ss = num_ss)
+    
+    ss_sampler = SSSampler(num_ss,x_data, u_data, q_data, q_scaling = 10000, drone = drone)
+    
+    ss_vecs, ss_q = ss_sampler.update(x0)
+    
+    m = LMPC.MPCUtil(N, dim_x, dim_u, num_ss = num_ss, track = track)
     
     m.set_model_matrices(drone.A_affine, drone.B_affine, drone.C_affine)
     m.set_x0(x0)
@@ -431,90 +435,118 @@ def run_LMPC(drone, track, x_data, u_data, q_data):
     m.set_ss(ss_vecs, ss_q)
     m.set_state_constraints(Fx, bx_u, bx_l, Fu, bu_u, bu_l, E)
     
-    if False:
-        m.setup()
-        
-        m.solve()
-
-        print('LQR u: %s'%str(u_data[0]))
-        print('LMPC u: %s'%str(m.predicted_u[0]))
-        print('avg. terminal point: %f'%np.sum(m.predicted_lambda * np.arange(m.num_ss)))
-        print(m.predicted_lambda)
-        print('terminal slack: %f'%np.linalg.norm(m.predicted_mu))
-        print('lane slack: %f'%np.linalg.norm(m.predicted_eps))
-        plt.figure()
-        for i in range(10):
-            plt.subplot(10,2,i*2+1)
-            plt.plot(m.predicted_x[:,i])
-            plt.plot(x_data[:N,i])
-        for i in range(3):
-            plt.subplot(10,2,i*2+2)
-            plt.plot(m.predicted_u[:,i])
-            plt.plot(u_data[:N,i])
-        
-    
-        #check_affine_feasibility(drone,m.predicted_x,m.predicted_u)
-        #check_affine_feasibility(drone,x_data,u_data)
-        
-        plt.show(block = False)
-        #pdb.set_trace()
-    
-    plt.figure()
+    m.setup()
     
     x = x0.copy()
-    xlist = []
-    ulist = []
-    for j in range(N + 50):
-        m.setup() 
-        #m.update() #setup()
+    p = np.array([x[0], x[4], x[8]]).squeeze()
+    s, e_y, e_z, e_th, e_phi = track.global_to_local_waypoint(p, 0, 0)
+    
+    if show_plots:
+        fig = plt.figure(figsize = (14,7))
+        ax = fig.gca(projection='3d')
+        track.plot_map(ax)
+        plt.ion()
+        plt.show(block = False)
+        fig.canvas.draw()
+        fig.canvas.flush_events()
+        bg = fig.canvas.copy_from_bbox(fig.bbox)
+        
+        loc = ax.plot(x[0],x[4],x[8], 'ob', markersize = 12)
+        pred = ax.plot(m.predicted_x[:,0],
+                       m.predicted_x[:,4],
+                       m.predicted_x[:,8], '-b', linewidth = 2)
+        tar = ax.plot([0],[0],[0], 'or',markersize = 12)
+        ss = ax.plot(ss_vecs[0,:].T, ss_vecs[4,:].T, ss_vecs[8,:].T,'og', alpha = 0.2)
+    
+    t_list = []
+    x_list = []
+    u_list = []
+    s_list = []
+    e_y_list = []
+    e_z_list = []
+    e_th_list = []
+    e_phi_list = []
+    
+    t = 0
+    t_start = time.time()
+    
+    itr = 0
+    lap_done = False
+    lap_halfway = False
+    while not lap_done:
+        m.set_x0(x)
+        m.set_ss(ss_vecs, ss_q)
+        m.update() 
+        
         if m.solve() == -1:
-            pdb.set_trace()
-            break
-        n_step = 10
-        if j == 0: u_list = m.predicted_u
+            m.update()
+            if m.solve() == -1:
+                pdb.set_trace()
+            
+        n_step = 1
+        
         for k in range(n_step):
             u = m.predicted_u[k:k+1]
-            #if j < N: u = u_list[j*n_step + k:j*n_step + k+1]
-            #else: u = np.array([[0,0,14]])
-            xlist.append(x)
-            ulist.append(u.T)
-            x = drone.A_affine @ x + drone.B_affine @ u.T + drone.C_affine
             
-        for i in range(dim_x):
-            plt.subplot(10,2,i*2+1)
-            plt.plot(range(j*n_step,j*n_step+N+1), m.predicted_x[:,i],'--')
-            plt.plot(range(j*n_step,j*n_step+num_ss), ss_vecs.T[:,i],'-.o',color = 'green',alpha = 0.4)
-        for i in range(dim_u):
-            plt.subplot(10,2,i*2+2)
-            plt.plot(range(j*n_step,j*n_step+N), m.predicted_u[:,i],'--')
+            p = np.array([x[0], x[4], x[8]]).squeeze()
+            s_prev = s
+            s, e_y, e_z, e_th, e_phi = track.global_to_local_waypoint(p, 0, 0)
+            
+            t_list.append(t)
+            x_list.append(x)
+            u_list.append(u.T)
+            s_list.append(s)
+            e_y_list.append(e_y)
+            e_z_list.append(e_z)
+            e_th_list.append(e_th)
+            e_phi_list.append(e_phi)
+            
+            
+            x = drone.A_affine @ x + drone.B_affine @ u.T + drone.C_affine
+            t += 0.05
+            itr += 1
         
-        #xf = x_data[j+N+dxf:j+dxf+N+1,:].T
-        ss_vecs = x_data.T[:,j*n_step+n0:j*n_step+n0+num_ss]
-        ss_q = np.array([q_data]).T[j*n_step+n0:j*n_step+n0+num_ss,:]
-        ss_q -= ss_q[-1]
-        #ss_q *= 100000
+        if itr % (10*n_step) == 0 and show_plots:
+            fig.canvas.restore_region(bg)
+            
+            
+            loc[0].set_data(x[0],x[4])
+            loc[0].set_3d_properties(x[8]) 
+            
+            pred[0].set_data(m.predicted_x[:,0],m.predicted_x[:,4])
+            pred[0].set_3d_properties(m.predicted_x[:,8])
+            
+            tar[0].set_data(ss_vecs[0,-1],ss_vecs[4,-1])
+            tar[0].set_3d_properties(ss_vecs[8,-1]) 
+            
+            ss[0].set_data(ss_vecs[0,:], ss_vecs[4,:])
+            ss[0].set_3d_properties(ss_vecs[8,:])
+            
+            fig.canvas.draw()
+            fig.canvas.flush_events()
+                
         
-        m.set_x0(x)
+        ss_vecs, ss_q = ss_sampler.update(x)
         
-        #m.set_ss(ss_vecs, ss_q)
-    xlist = np.array(xlist)
-    ulist = np.array(ulist)
-    for i in range(dim_x):
-        plt.subplot(10,2,i*2+1)
-        plt.plot(xlist[:,i,0],'-k')
-        plt.plot(x_data[:N*n_step+50,i],color = 'orange', linewidth = 2)
-    for i in range(dim_u):
-        plt.subplot(10,2,i*2+2)
-        plt.plot(ulist[:,i,0],'-k')
-        plt.plot(u_data[:N*n_step+50,i],color = 'orange', linewidth = 2)
+        if not track.inside_track(p):
+            print('Warning - out of track boundaries')
+            print('MPC Raceline Progress: (%6.2f/%0.2f)'%(s, track.track_length), end = '\n')
+        else:
+            print('MPC Raceline Progress: (%6.2f/%0.2f)'%(s, track.track_length), end = '\r')
         
-    
-    plt.show()  
+        if s > track.track_length/2 and s < 3.0/4*track.track_length:  
+            lap_halfway = True
+        elif lap_halfway:
+            if s < 10:
+                lap_done = True
         
-        
-    #pdb.set_trace()
-    
-    return   
+    x_list = np.array(x_list).squeeze()
+    q_list = np.array(t_list).squeeze()
+    q_list = np.flip(q_list)
+    u_list = np.array(u_list).squeeze()
+    print('\n* Finished LMPC (%0.2f seconds)*'%t)
+    #print('* Ran at ~ %0.2fHz'%(itr/(time.time() - t_start)))
+    return x_list, u_list, q_list
 
 def check_affine_feasibility(drone,x_data,u_data):
     errs = []
@@ -618,7 +650,7 @@ def main():
         np.savez('lqr_raceline_data.npz', x  = x_lqr_raceline, u = u_lqr_raceline, q = q_lqr_raceline)
     
     
-    if False: #os.path.exists('mpc_data.npz'):
+    if os.path.exists('mpc_data.npz'):
         data = np.load('mpc_data.npz')
         x_mpc = data['x']
         u_mpc = data['u']
@@ -626,10 +658,14 @@ def main():
     else:
         lqr_raceline.p_window = 70
         lqr_raceline.window = 20
-        x_mpc, u_mpc, q_mpc = run_MPC(drone, track, lqr_raceline)
+        x_mpc, u_mpc, q_mpc = run_MPC(drone, track, lqr_raceline, show_plots = True)
         np.savez('mpc_data.npz', x  = x_mpc, u = u_mpc, q = q_mpc)
     
-    #run_LMPC(drone, track, x_lqr, u_lqr, q_lqr)
+    x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_mpc, u_mpc, q_mpc, show_plots = True)
+    #x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_lqr, u_lqr, q_lqr, show_plots = True)
+    for j in range(2):
+        x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_lmpc, u_lmpc, q_lmpc, show_plots = False)
+        
     #run_ugo_LMPC(drone,track, x_list, u_list, q_list)'''
     
 
