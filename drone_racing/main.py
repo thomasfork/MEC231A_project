@@ -650,7 +650,7 @@ def main():
         np.savez('lqr_raceline_data.npz', x  = x_lqr_raceline, u = u_lqr_raceline, q = q_lqr_raceline)
     
     
-    if os.path.exists('mpc_data.npz'):
+    if False: # os.path.exists('mpc_data.npz'):
         data = np.load('mpc_data.npz')
         x_mpc = data['x']
         u_mpc = data['u']
@@ -661,10 +661,10 @@ def main():
         x_mpc, u_mpc, q_mpc = run_MPC(drone, track, lqr_raceline, show_plots = True)
         np.savez('mpc_data.npz', x  = x_mpc, u = u_mpc, q = q_mpc)
     
-    x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_mpc, u_mpc, q_mpc, show_plots = True)
+    #x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_mpc, u_mpc, q_mpc, show_plots = True)
     #x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_lqr, u_lqr, q_lqr, show_plots = True)
-    for j in range(2):
-        x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_lmpc, u_lmpc, q_lmpc, show_plots = False)
+    #for j in range(2):
+    #    x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_lmpc, u_lmpc, q_lmpc, show_plots = False)
         
     #run_ugo_LMPC(drone,track, x_list, u_list, q_list)'''
     

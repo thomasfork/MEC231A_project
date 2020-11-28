@@ -13,10 +13,11 @@ class MPCUtil():
     General purpose MPC utility. Can (eventually) be used for MPC, LMPC, ATV_MPC, etc...
     
     '''
+    
+    #TODO Implement option for a terminal set
+    
 
-
-    def __init__(self, N, dim_x, dim_u, num_ss = 50, track = None):
-        #support for non-LMPC is not yet implemented
+    def __init__(self, N, dim_x, dim_u, num_ss = 50, track = None, time_varying = False): 
         self.N = N
         self.dim_x = dim_x
         self.dim_u = dim_u
@@ -26,6 +27,7 @@ class MPCUtil():
         self.num_mu = self.dim_x
         
         self.track = track
+        self.time_varying = time_varying
         
         self.last_output = np.zeros((self.dim_u,1))
         self.last_solution = None
@@ -33,8 +35,9 @@ class MPCUtil():
         self.predicted_x = np.zeros((self.N+1, self.dim_x))
         self.predicted_u = np.zeros((self.N, self.dim_u))
         
-        #TODO: These are currently placeholders and may not work if changed
-        # They are also overwritten by setup() and setup_MPC()
+        self.sparse_eps = 1e-9  # offset applied to zero values of sparse matrices that need to be nonzero for initializing OSQP properly
+        
+        # These are placeholders overwritten by setup() and setup_MPC()
         self.use_ss = True
         self.use_terminal_slack = True
         self.use_lane_slack = True
@@ -45,21 +48,39 @@ class MPCUtil():
         return
 
 
-    def set_model_matrices(self, A ,B ,C = None):
-        assert A.shape[1] == A.shape[0]
-        assert A.shape[1] == self.dim_x
-        assert B.shape[0] == self.dim_x
-        assert B.shape[1] == self.dim_u
+    def set_model_matrices(self, A ,B ,C = None): 
+        if self.time_varying:
+            '''
+            Expects an array of shape N x dim_x x dim_x for A, and similar for B,C
+            This can easily be made by making a list of the numpy arrays and calling numpy.array(list_of_arrays)
+            '''
+            assert A.shape[0] == self.N
+            assert A.shape[1] == self.dim_x
+            assert A.shape[2] == self.dim_x
+            assert B.shape[0] == self.N
+            assert B.shape[1] == self.dim_x
+            assert B.shape[2] == self.dim_u
+            if C is None: C = np.zeros((self.N, self.dim_x, 1))
+            assert C.shape[0] == self.N
+            assert C.shape[1] == self.dim_x
+            assert C.shape[2] == 1
+            
+        else:
+            assert A.shape[1] == A.shape[0]
+            assert A.shape[1] == self.dim_x
+            assert B.shape[0] == self.dim_x
+            assert B.shape[1] == self.dim_u
+            
+            if C is None:   
+                C = np.zeros((self.dim_x, 1))
+            assert C.shape[0] == self.dim_x
+            assert C.shape[1] == 1
         
-        if C is None:   
-            C = np.zeros((self.dim_x, 1))
-        assert C.shape[0] == self.dim_x
-        assert C.shape[1] == 1
         
-        
-        self.A = A
-        self.B = B
+        self.A = A.astype('float64')
+        self.B = B.astype('float64')
         self.C = C
+        self.model_update_flag = True
         return
 
     def set_state_costs(self, Q, P, R, dR):
@@ -121,11 +142,11 @@ class MPCUtil():
         assert ss_q.shape[0] == self.num_ss
         assert ss_q.shape[1] == 1
         
-        self.ss_terminal_q = ss_q
-        self.ss_terminal_vecs = ss_vecs
+        self.ss_terminal_q = ss_q.astype('float64')
+        self.ss_terminal_vecs = ss_vecs.astype('float64')
         return
     
-    def set_x0(self,x0, xf = None):
+    def set_x0(self,x0, xf = None):  #TODO Option for terminal set 
         if xf is None:
             xf = np.zeros(x0.shape)
         assert x0.shape[0] == self.dim_x
@@ -134,10 +155,6 @@ class MPCUtil():
         assert xf.shape[1] == 1
         self.x0 = x0
         self.xf = xf
-        
-        self.u_offset = np.linalg.pinv(self.B) @((np.eye(self.dim_x) - self.A) @ self.xf - self.C)
-        
-        
         return
         
     def build_cost_matrix(self):
@@ -148,17 +165,22 @@ class MPCUtil():
              sparse.kron(sparse.eye(self.N), self.R+2*self.dR)
         M = sparse.block_diag([Mx, Mu])
         
-        #q = np.zeros((self.num_x,1))
-        if self.use_ss:
+        #State cost offset
+        if self.use_ss:  
             q = np.vstack([np.kron(np.ones((self.N,1)), -self.Q @ self.ss_terminal_vecs[:,-1:]), -self.P @ self.ss_terminal_vecs[:,-1:]])
         else:
             q = np.vstack([np.kron(np.ones((self.N,1)), -self.Q @ self.xf), -self.P @ self.xf])
         
-        #q = np.vstack([q, np.zeros((self.num_u,1))]) 
+        #Output cost offset 
+        #TODO: prior output dR cost should go here too
+        if not self.time_varying:
+            u_offset = np.linalg.pinv(self.B) @((np.eye(self.dim_x) - self.A) @ self.xf - self.C)
+        for i in range(self.N): 
+            if self.time_varying:
+                u_offset = np.linalg.pinv(self.B[i]) @((np.eye(self.dim_x) - self.A[i]) @ self.xf - self.C[i])
+            q = np.vstack([q, -self.R @ u_offset]) 
         
-        for i in range(self.N):  #TODO: prior output dR cost should go here too
-            q = np.vstack([q, -self.R @ self.u_offset]) 
-        
+        #Optional costs
         if self.use_ss: 
             M = sparse.block_diag([M, sparse.csc_matrix((self.num_lambda, self.num_lambda))])
             q = np.vstack([q, self.ss_terminal_q])
@@ -180,17 +202,40 @@ class MPCUtil():
     def build_constraint_matrix(self):
         #more info on the constraints for OSQP can be found at https://osqp.org
         # in particular, https://osqp.org/docs/examples/mpc.html provides a great MPC example
-
-        #more info on the constraints for the berkeley car can be found at a location coming soon.
         
         #Equality constraints:
-        # state constraints - x_k+1 = A*x_k + B*u_k
+        # state constraints - x_k+1 = A*x_k + B*u_k   
         # except x_0 = self.x0  
-        Ax = sparse.kron(sparse.eye(self.N+1),sparse.eye(self.dim_x)) + \
-             sparse.kron(sparse.eye(self.N+1, k=-1), -self.A)                #TODO: Time varying case would be implemented here
-        Au = sparse.kron(sparse.vstack([sparse.csc_matrix((1, self.N)), sparse.eye(self.N)]), -self.B)
+        tmp_A = self.A.copy() # remove nonzero entries to fully initialize OSQP - these are fixed by calling update() after setup() (done automatically) 
+        tmp_B = self.B.copy()
+        tmp_A[tmp_A == 0] = self.sparse_eps
+        tmp_B[tmp_B == 0] = self.sparse_eps
+        
+        if self.time_varying:
+            tmp = sparse.block_diag([-tmp_A[i] for i in range(self.N)])
+            AxA = sparse.hstack([sparse.vstack([sparse.csc_matrix((self.dim_x, self.num_x - self.dim_x)), tmp]), sparse.csc_matrix((self.num_x, self.dim_x))])
+            AxI = sparse.kron(sparse.eye(self.N+1), sparse.eye(self.dim_x))
+            
+            Ax = AxA + AxI
+            Au = sparse.vstack([sparse.csc_matrix((self.dim_x, self.num_u)), sparse.block_diag([-tmp_B[i] for i in range(self.N)])])
+        else:
+            Ax = sparse.eye(self.num_x) + \
+                 sparse.kron(sparse.eye(self.N+1, k=-1), -tmp_A)         
+            Au = sparse.kron(sparse.vstack([sparse.csc_matrix((1, self.N)), sparse.eye(self.N)]), -tmp_B)
+            
+            
         Aeq = sparse.hstack([Ax, Au])
-        leq = np.vstack([self.x0, np.tile(self.C.T,self.N).T])            
+        
+        self.model_start_row = 0
+        self.model_stop_row = Aeq.shape[0]
+        self.model_start_col = 0
+        self.model_stop_col = Aeq.shape[1]
+        
+        
+        if self.time_varying:
+            leq = np.vstack([self.x0, self.C.reshape(-1,1)])
+        else:
+            leq = np.vstack([self.x0, np.tile(self.C.T,self.N).T])            
 
         # safe set constraints:
         #  terminal point must be a weighted sum of safe set points and slack:
@@ -199,15 +244,15 @@ class MPCUtil():
             temp_Aeq_height = Aeq.shape[0]
             
             # remove any zero elements in the safe set so that all entries are given a spot in sparse matrix osqp_A and can be updated (only has to be done for setup)
-            self.ss_terminal_vecs[self.ss_terminal_vecs == 0] = 1e-6
-            
+            tmp_ss_vecs = self.ss_terminal_vecs.copy()
+            tmp_ss_vecs[tmp_ss_vecs == 0] = self.sparse_eps
             if self.use_terminal_slack:
-
-                A_lambda = np.vstack((np.hstack((self.ss_terminal_vecs, -np.eye(self.dim_x))), np.hstack((np.ones((1,self.num_ss)), np.zeros((1,self.dim_x))))))
+                A_lambda = np.vstack((np.hstack((tmp_ss_vecs, -np.eye(self.dim_x))), np.hstack((np.ones((1,self.num_ss)), np.zeros((1,self.dim_x))))))
             else:
-                A_lambda = sparse.vstack([self.ss_terminal_vecs, np.ones((1,self.num_ss))])
+                A_lambda = sparse.vstack([tmp_ss_vecs, np.ones((1,self.num_ss))])
             
-            self.ss_start_row = Aeq.shape[0]  # store row/col numbers to find sparse indices that correspond to safe set vectors
+            # store row/col numbers to find sparse indices that correspond to safe set vectors
+            self.ss_start_row = Aeq.shape[0]  
             self.ss_start_col = Aeq.shape[1]
             Aeq = sparse.block_diag((Aeq,A_lambda))
             self.ss_stop_row = self.ss_start_row + self.dim_x
@@ -220,7 +265,7 @@ class MPCUtil():
         #  update leq, ueq with terminal constraints
             leq = np.vstack([leq, np.zeros((self.dim_x, 1)), 1])
         
-        # otherwise add terminal constraint
+        # otherwise add terminal constraint with xf
         else:   
             tmp = np.zeros((1,self.N + 1))
             tmp[0,self.N] = 1
@@ -233,7 +278,13 @@ class MPCUtil():
             A_terminal = sparse.block_diag([A_terminal_x, A_terminal_u])
             Aeq = sparse.vstack([Aeq, A_terminal])
             
-            leq = np.vstack([leq, self.xf, self.u_offset])
+            if self.time_varying:
+                u_offset = np.linalg.pinv(self.B[-1]) @((np.eye(self.dim_x) - self.A[-1]) @ self.xf - self.C)
+            else:
+                u_offset = np.linalg.pinv(self.B) @((np.eye(self.dim_x) - self.A) @ self.xf - self.C)
+            
+            leq = np.vstack([leq, self.xf, u_offset])
+            
             
             if self.use_terminal_slack:
                 #TODO: add identity matrix for terminal x
@@ -307,7 +358,13 @@ class MPCUtil():
         self.osqp_A = sparse.csc_matrix(self.osqp_A)
         
         # find indices for any part of osqp_A that may need to be updated:
-        if self.use_ss : 
+        model_idxptrs = np.arange(self.osqp_A.indptr[self.model_start_col], self.osqp_A.indptr[self.model_stop_col])
+        model_idxptr_rows = self.osqp_A.indices[model_idxptrs]
+        model_idxs = model_idxptrs[np.argwhere(np.logical_and(model_idxptr_rows >= self.model_start_row, model_idxptr_rows < self.model_stop_row))]
+            
+        self.model_idxs = model_idxs
+        
+        if self.use_ss: 
             ss_idxptrs = np.arange(self.osqp_A.indptr[self.ss_start_col], self.osqp_A.indptr[self.ss_stop_col])
             ss_idxptr_rows = self.osqp_A.indices[ss_idxptrs]
             ss_idxs = ss_idxptrs[np.argwhere(np.logical_and(ss_idxptr_rows >= self.ss_start_row, ss_idxptr_rows < self.ss_stop_row))]
@@ -315,6 +372,7 @@ class MPCUtil():
             self.ss_vec_idxs = ss_idxs
             
         if self.use_track_constraints: self.track_boundary_idxs = np.argwhere(np.logical_and(self.osqp_A.indices >= self.boundary_start_row , self.osqp_A.indices < self.boundary_stop_row))
+        
         
         return
         
@@ -332,6 +390,7 @@ class MPCUtil():
         Modifying osqp_l and osqp_u doesn't need this
         '''
         if self.track is None:
+            self.use_track_constraints = False
             return
         if not self.use_track_constraints:
             return
@@ -374,6 +433,7 @@ class MPCUtil():
         self.build_constraint_matrix()
         
         self.create_solver()
+        self.update() #remove placeholder entries now that OSQP has been fully set up
         return
         
     def setup_MPC(self):
@@ -392,6 +452,7 @@ class MPCUtil():
         self.build_constraint_matrix()
         
         self.create_solver()
+        self.update() #remove placeholder entries now that OSQP has been fully set up
         return
         
     
@@ -416,9 +477,9 @@ class MPCUtil():
         CSC matrices store data in compressed column format - meaning indices are ordered first by column, then by row
         read scipy documentation for more detail. 
         '''
-        if self.use_ss: self.update_ss()  #Disabled due to sparse data indexing bug
         self.update_x0()
-        #self.update_model_matrices()   #Disabled due to sparse data indexing bug
+        if self.model_update_flag: self.update_model_matrices()  
+        if self.use_ss: self.update_ss() 
         
         if self.use_track_constraints: self.update_track_boundaries()
         
@@ -450,12 +511,36 @@ class MPCUtil():
         return
     
     def update_model_matrices(self): #TODO: Fix sparse data indexing bug
-        Ax = sparse.kron(sparse.eye(self.N+1),sparse.eye(self.dim_x)) + \
-             sparse.kron(sparse.eye(self.N+1, k=-1), -self.A)                #TODO: Implement time varying case
-        Au = sparse.kron(sparse.vstack([sparse.csc_matrix((1, self.N)), sparse.eye(self.N)]), -self.B)
-        Aeq = sparse.hstack([Ax, Au])
+        if self.time_varying:
+            Ax_data = np.hstack([np.vstack([np.ones((1,self.dim_x)), -self.A[i]]) for i in range(self.N)])
+            Bx_data = np.hstack([-self.B[i] for i in range(self.N)])
+            Ax_data = Ax_data.T.reshape(-1,1)
+            Ax_data = np.vstack([Ax_data, np.ones((self.dim_x,1))]) 
+            Bx_data = Bx_data.T.reshape(-1,1)
+            model_data = np.vstack([Ax_data, Bx_data])
+            self.osqp_A.data[self.model_idxs] = model_data
+            pdb.set_trace()
+            
+            return
+        else:
+            
+            Ax_data = np.hstack([np.vstack([np.ones((1,self.dim_x)), -self.A]) for i in range(self.N)])
+            Bx_data = np.hstack([-self.B for i in range(self.N)])
+            Ax_data = Ax_data.T.reshape(-1,1)
+            Ax_data = np.vstack([Ax_data, np.ones((self.dim_x,1))]) 
+            Bx_data = Bx_data.T.reshape(-1,1)
+            model_data = np.vstack([Ax_data, Bx_data])
+            self.osqp_A.data[self.model_idxs] = model_data
+            return
+            
+            '''Ax = sparse.kron(sparse.eye(self.N+1),sparse.eye(self.dim_x)) + \
+                 sparse.kron(sparse.eye(self.N+1, k=-1), -self.A)               
+            Au = sparse.kron(sparse.vstack([sparse.csc_matrix((1, self.N)), sparse.eye(self.N)]), -self.B)
+            Aeq = sparse.hstack([Ax, Au])
+            
+            self.osqp_A[0:Aeq.shape[0], 0:Aeq.shape[1]] = Aeq'''
         
-        self.osqp_A[0:Aeq.shape[0], 0:Aeq.shape[1]] = Aeq
+        self.model_update_flag = False
         return
             
     def update_track_boundaries(self): #locally linearized lane boundaries
@@ -504,7 +589,7 @@ class MPCUtil():
                 
             bl,A,bu = self.track.linearize_boundary_constraints(p)
             
-            if is_placeholder: A[A==0] = 0.001
+            if is_placeholder: A[A==0] = self.sparse_eps
             
             Aexp = np.zeros((3,self.dim_x))
             Aexp[:,[0,4,8]] = A
@@ -569,10 +654,15 @@ def main():
     dim_mu = dim_x
     dim_eps = N
     dim_ss = 4
+    time_varying = False
     
     A = np.array([[1,0.1],[0,.9]])
     B = np.array([[0],[1]])
     C = np.array([[0.0],[0]])
+    if time_varying:
+        A = np.array([A for j in range(N)])
+        B = np.array([B for j in range(N)])
+        C = np.array([C for j in range(N)])
     
     x0 = np.ones((dim_x,1)) * 4
     
@@ -588,13 +678,6 @@ def main():
     ss_vecs[1,:] = 0
     ss_q    = np.zeros((dim_ss,1))
     
-    #Fx = np.array([[0,0,0,0,0,1]])
-    #bx_u = np.array([[0.8]])
-    #bx_l =  np.array([[-0.8]])
-    
-    #Fu = np.eye(2)
-    #bu_u = np.array([[10],[0.5]])
-    #bu_l = np.array([[-10],[-0.5]])
     
     Fx = np.eye(2)
     bx_u = np.array([[10],[10]])
@@ -606,8 +689,7 @@ def main():
     
     E = np.array([[1],[1]])
     
-    
-    m = MPCUtil(N, dim_x, dim_u, num_ss = dim_ss)
+    m = MPCUtil(N, dim_x, dim_u, num_ss = dim_ss, time_varying = time_varying)
     m.set_model_matrices(A,B,C)
     m.set_x0(x0)
     m.set_state_costs(Q, P, R, dR)
@@ -617,16 +699,8 @@ def main():
     
     m.setup()
     
-    assert m.osqp_P.shape[0] == dim_x  *(N+1) + N*dim_u + dim_eps + dim_mu + dim_ss 
-    assert m.osqp_P.shape[0] == m.osqp_P.shape[1]
+    m.update()
     
-    
-    
-    assert m.osqp_A.shape[1] == m.osqp_A.shape[1]
-    assert m.osqp_A.shape[0] == m.osqp_l.shape[0]
-    assert m.osqp_A.shape[0] == m.osqp_u.shape[0]
-    assert m.osqp_l.shape[1] == 1
-    assert m.osqp_u.shape[1] == 1
     m.solve()
     
         
@@ -647,8 +721,11 @@ def main():
         m.update() #setup()
         m.solve()
         u = m.predicted_u[0:1]
-        print(u)
-        x = A @ x + B @ u + C
+        if time_varying:
+            x = A[0] @ x + B[0] @ u + C[0]
+        else:
+            x = A @ x + B @ u + C
+        
         for i in range(dim_x):
             plt.subplot(2,2,i*2+1)
             plt.plot(range(j,j+N+1), m.predicted_x[:,i],'--')
