@@ -3,7 +3,6 @@ from scipy import sparse, linalg
 import osqp
 import pdb
 
-#from compatibility_lib.cleaned_LMPC.local_linearization import PredictiveModel
 import copy
 from matplotlib import pyplot as plt
 import time

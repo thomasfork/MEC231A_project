@@ -348,7 +348,7 @@ def run_MPC(drone, track, raceline, show_plots = True):
         m.update()   
         
         
-        if itr % 10 == 0 and show_plots:
+        if itr % 1000 == 0 and show_plots:
             fig.canvas.restore_region(bg)
             
             loc[0].set_data(x[0],x[4])
@@ -383,7 +383,7 @@ def run_MPC(drone, track, raceline, show_plots = True):
     q_list = np.flip(q_list)
     u_list = np.array(u_list)
     print('\n* Finished MPC Raceline (%0.2f seconds)*'%t)
-    #print('* Ran at ~ %0.2fHz'%(itr/(time.time() - t_start)))
+    print('* Ran at ~ %0.2fHz'%(itr/(time.time() - t_start)))
     return x_list, u_list, q_list
 
 def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True):
