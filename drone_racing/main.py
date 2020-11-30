@@ -284,14 +284,14 @@ def run_MPC(drone, track, raceline, show_plots = True):
     #x_tar, u_tar, s_tar = raceline.update_p_target(p) 
     x_tar = x_tar[0:dim_x]
     
-    m = LMPC.MPCUtil(N, dim_x, dim_u, num_ss = num_ss, track = track)
+    m = LMPC.DroneMPCUtil(N, dim_x, dim_u, num_ss = num_ss, track = track)
     
     m.set_model_matrices(drone.A_affine, drone.B_affine, drone.C_affine)
     m.set_x0(x,x_tar)
     m.set_state_costs(Q, P, R, dR)
     m.set_slack_costs(Q_mu, Q_eps, b_eps)
     m.set_ss(ss_vecs, ss_q)
-    m.set_state_constraints(Fx, bx_u, bx_l, Fu, bu_u, bu_l, E)
+    m.set_global_constraints(Fx, bx_u, bx_l, Fu, bu_u, bu_l, E)
     
     m.setup_MPC()
     
@@ -365,7 +365,7 @@ def run_MPC(drone, track, raceline, show_plots = True):
         t_convert.append(t3-t2)
         t_update.append(t4-t3)
         
-        if itr % 1000 == 0 and show_plots:
+        if itr % 10 == 0 and show_plots:
             fig.canvas.restore_region(bg)
             
             loc[0].set_data(x[0],x[4])

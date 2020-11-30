@@ -47,7 +47,8 @@ class MPCUtil():
     def __init__(self, N, dim_x, dim_u, 
                  num_ss = 50, 
                  time_varying = False, 
-                 num_local_constraints = 2): 
+                 num_local_constraints = 2,
+                 verbose = False): 
         '''
         This defines a MPC problem - if any of these arguments were to change (except the track, which can be modified safely) 
         the problem would have to be recreated from scratch since solver and parameters would be incorrect
@@ -74,9 +75,9 @@ class MPCUtil():
         self.num_mu = self.dim_x        # Slack variables for terminal constraints - a slack term mu is added to each state component
         
         
-        self.track = track
         self.time_varying = time_varying
         self.num_local_constraints = num_local_constraints
+        self.verbose = verbose
         
         self.last_output = np.zeros((self.dim_u,1))
         self.last_solution = None
@@ -86,14 +87,17 @@ class MPCUtil():
         
         self.sparse_eps = 1e-9  # offset applied to zero values of sparse matrices that need to be nonzero for initializing OSQP properly
         
-        # These are placeholders overwritten by setup() and setup_MPC()
+        # These are placeholders overwritten by setup_LMPC() and setup_MPC()
         # quadratic state and output costs are always present, as well as global state and output constraints
         self.use_ss = True                  # enable safe set terminal condition
         self.use_xf = True                  # terminal condition is x = self.xf
         self.use_local_constraints = False  # enable local constraints (should be used for terminal sets) 
         self.use_terminal_slack = True      # slack variable on safe set or xf constraint (not added if use_ss and use_xf_uf are both false)
         self.use_global_slack = True        # slack variable on global constraints
-        self.use_local_slack = False        # slack variable on local constraints
+        self.use_local_slack = False        # slack variable on local constraints'''
+        
+        
+        
         self.state_cost_offset_mode = 'auto'
         self.output_cost_offset_mode = 'auto'
         
@@ -139,6 +143,7 @@ class MPCUtil():
         self.A = A.astype('float64')
         self.B = B.astype('float64')
         self.C = C
+        
         self.model_update_flag = True
         return
 
@@ -273,6 +278,10 @@ class MPCUtil():
         self.loc_bx_l = bx_l
         self.loc_E = E
         self.max_local_slack = max_local_slack
+        
+        
+        self.local_update_flag = True
+        return
 
     def set_ss(self,ss_vecs, ss_q):
         '''
@@ -287,6 +296,8 @@ class MPCUtil():
         
         self.ss_terminal_q = ss_q.astype('float64')
         self.ss_terminal_vecs = ss_vecs.astype('float64')
+        
+        self.ss_update_flag = True
         return
     
     def set_x0(self,x0, xf = None, uf = None):  
@@ -313,6 +324,8 @@ class MPCUtil():
         self.x0 = x0
         self.xf = xf
         self.uf = uf
+        
+        self.x0_update_flag = True
         return
         
     def build_cost_matrix(self):
@@ -326,7 +339,7 @@ class MPCUtil():
         Pu = sparse.kron(sparse.eye(self.N, k = -1), -self.dR)  +\
              sparse.kron(sparse.eye(self.N, k =  1), -self.dR)  +\
              sparse.kron(sparse.eye(self.N), self.R+2*self.dR)
-        P = sparse.block_diag([Mx, Mu])
+        P = sparse.block_diag([Px, Pu])
         
         
         #State cost offset
@@ -508,15 +521,15 @@ class MPCUtil():
         if self.use_terminal_slack:
             Aineq = sparse.hstack([Aineq,sparse.csc_matrix((Aineq.shape[0], self.dim_x))])
 
-        # add effect on state constraints if lane slack is added.
+        # add effect on state constraints if global slack is added.
         #    note: does not effect terminal state
-        if self.use_lane_slack:
+        if self.use_global_slack:
             slack_matrix = sparse.block_diag(([self.E]*self.N))
             Aineq = sparse.block_diag([Aineq, sparse.eye(self.num_eps)])
             Aineq = sparse.lil_matrix(Aineq)
             Aineq [0:slack_matrix.shape[0],-slack_matrix.shape[1]:] = slack_matrix
 
-            #force lane slack to less than max_global_slack (+/- since slack can act on either side of the lane)
+            #force global slack to less than max_global_slack (+/- since slack can act on either side of the constraint)
             
             lineq = np.vstack([lineq, -np.ones((self.E.shape[1]*self.N,1))*self.max_global_slack])
             uineq = np.vstack([uineq, np.ones((self.E.shape[1]*self.N,1))*self.max_global_slack])
@@ -525,8 +538,10 @@ class MPCUtil():
         
         
         if self.use_local_constraints:
-            A = sparse.block_diag([self.loc_Fx[i] for i in range(self.N)])
-            A = sparse.hstack((sparse.csc_matrix((A.shape[0], self.dim_x)))) # no local constraint on initial state self.x0
+            tmp_loc_Fx = self.loc_Fx.copy()
+            tmp_loc_Fx[tmp_loc_Fx == 0] = self.sparse_eps
+            A = sparse.block_diag([tmp_loc_Fx[i] for i in range(self.N)])
+            A = sparse.hstack((sparse.csc_matrix((A.shape[0], self.dim_x)), A)) # no local constraint on initial state self.x0
             bx_l = np.vstack([self.loc_bx_l[i] for i in range(self.N)])
             bx_u = np.vstack([self.loc_bx_u[i] for i in range(self.N)])
             
@@ -587,7 +602,7 @@ class MPCUtil():
         if self.use_local_constraints: 
             local_idxptrs = np.arange(self.osqp_A.indptr[self.local_start_col], self.osqp_A.indptr[self.local_stop_col])
             local_idxptr_rows = self.osqp_A.indices[local_idxptrs]
-            local_idxs = ss_idxptrs[np.argwhere(np.logical_and(local_idxptr_rows >= self.local_start_row, local_idxptr_rows < self.local_stop_row))]
+            local_idxs = local_idxptrs[np.argwhere(np.logical_and(local_idxptr_rows >= self.local_start_row, local_idxptr_rows < self.local_stop_row))]
             self.local_idxs = local_idxs
             #self.track_boundary_idxs = np.argwhere(np.logical_and(self.osqp_A.indices >= self.boundary_start_row , self.osqp_A.indices < self.boundary_stop_row))
         
@@ -601,13 +616,17 @@ class MPCUtil():
         Sets up an OSQP problem, which can be solved with self.solve() and updated with self.update() 
         (not all variables can be updated with update(), some require setup(), see functions for setting variables for details)
         '''
-        self.compute_osqp_indices()
         self.build_cost_matrix()
         self.build_constraint_matrix()
         self.create_solver()
+        self.compute_osqp_indices()
         self.update() #remove placeholder entries now that OSQP has been fully set up
+        
+        if self.verbose:
+            print('Set up new MPC Problem:')
+            print(self.__str__())
         return
-         
+    
     def setup_LMPC(self):
         '''
         Helper function for setting up vanilla LMPC
@@ -642,7 +661,9 @@ class MPCUtil():
         These are only used to unpack solutions, they are not used in some magical fashion when constructing cost/constraint matrices
         So update this code if those processes are reordered.
         '''
-        self.index_x = 0
+        new_index = 0
+        
+        self.index_x = new_index
         new_index += self.num_x
         
         self.index_u = new_index
@@ -670,7 +691,7 @@ class MPCUtil():
             self.index_eta = new_index
             new_index += self.num_eta
         else:
-            self.inex_eta = None
+            self.inedx_eta = None
         return
         
     
@@ -683,13 +704,10 @@ class MPCUtil():
         
     def solve(self, init_vals = None):
         if init_vals is not None:
-            self.solver.warm_start(x=init_vals)
+            self.solver.warm_start(x = init_vals)
         elif self.last_solution is not None:
             self.solver.warm_start(x = self.last_solution)
         
-        z0 = np.vstack([self.x0, self.ss_terminal_vecs[:,0:self.N].reshape(-1,1)])
-        z0 = np.vstack([z0, np.zeros((self.osqp_P.shape[0] - z0.shape[0],1))])
-        self.solver.warm_start(x = z0)
         
         res = self.solver.solve()
         self.osqp_feasible = res.info.status_val == 1
@@ -702,24 +720,29 @@ class MPCUtil():
         return 1
         
     def unpack_results(self,res):
-        num_x = self.dim_x * (self.N + 1)
-        num_u = self.dim_u * self.N
-        self.last_solution = res.x
+        self.last_solution = res.x.copy()
         self.predicted_x = np.reshape(res.x[self.index_x:self.index_x + self.num_x], (self.N+1, self.dim_x))
         self.predicted_u = np.reshape(res.x[self.index_u:self.index_u + self.num_u], (self.N, self.dim_u))
         
         if self.use_ss:
             self.predicted_lambda = res.x[self.index_lambda:self.index_lambda + self.num_lambda]
         else:
-            self.predicted_lambda = np.nan
+            self.predicted_lambda = None
+            
         if self.use_terminal_slack:
             self.predicted_mu = res.x[self.index_mu:self.index_mu + self.num_mu]
         else:
-            self.predicted_mu = np.nan
-        if self.use_lane_slack:
+            self.predicted_mu = None
+            
+        if self.use_global_slack:
             self.predicted_eps = res.x[self.index_eps:self.index_eps + self.num_eps]
         else:
-            self.predicted_eps = np.nan
+            self.predicted_eps = None
+            
+        if self.use_local_slack:
+            self.predicted_eta = res.x[self.index_eta:self.index_eta + self.num_eta]
+        else:
+            self.predicted_eta = None
         
         return 
         
@@ -738,37 +761,57 @@ class MPCUtil():
         read scipy documentation for more detail. 
         '''
         self.update_x0()
+        self.update_cost_offset()
         self.update_model_matrices()  
         if self.use_ss: self.update_ss() 
-        
         if self.use_local_constraints: self.update_local_constraints()
         
         self.solver.update(q = self.osqp_q, Ax = self.osqp_A.data, l = self.osqp_l, u = self.osqp_u)
         return
         
-    def update_ss(self):
-        if not self.use_ss:
-            return
-        self.osqp_q[self.index_lambda : self.index_lambda + self.num_ss] = self.ss_terminal_q
-        
-        new_ss_vec_data = np.concatenate(self.ss_terminal_vecs.T)
-        self.osqp_A.data[self.ss_vec_idxs] = np.expand_dims(new_ss_vec_data,1)
-        
-        tmp = np.vstack([np.kron(np.ones((self.N,1)), -self.Q @ self.ss_terminal_vecs[:,-1:]), -self.P @ self.ss_terminal_vecs[:,-1:]])
-        self.osqp_q[0:tmp.shape[0]] = tmp
-        return
     
     def update_x0(self): #TODO update xf and uf as well depending on the cost mode
+        if not self.x0_update_flag:
+            return
+            
         self.osqp_l[0:self.dim_x] = self.x0
         self.osqp_u[0:self.dim_x] = self.x0
         
-        if not self.use_ss:
-            qn = np.vstack([np.kron(np.ones((self.N,1)), -self.Q @ self.xf), -self.P @ self.xf])
-            
-            self.osqp_q[0:len(qn)] = qn
+        if self.use_xf:
             self.osqp_l[self.dim_x * (self.N+1) : self.dim_x*(self.N+2)] = self.xf
             self.osqp_u[self.dim_x * (self.N+1) : self.dim_x*(self.N+2)] = self.xf
+        
+        self.x0_update_flag = False
         return
+        
+    def update_cost_offset(self):
+        if self.state_cost_offset_mode == 'none':
+            q = np.zeros((self.num_x,1))
+        elif (self.state_cost_offset_mode == 'auto' and self.use_ss) or self.state_cost_offset_mode == 'ss':
+            q = np.vstack([np.kron(np.ones((self.N,1)), -self.Q @ self.ss_terminal_vecs[:,-1:]), -self.P @ self.ss_terminal_vecs[:,-1:]])
+        elif (self.state_cost_offset_mode == 'auto' and not self.use_ss) or self.state_cost_offset_mode == 'xf':
+            q = np.vstack([np.kron(np.ones((self.N,1)), -self.Q @ self.xf), -self.P @ self.xf])
+        else:
+            raise NotImplementedError('Selected state cost offset mode is not implemented: "%s"'%self.state_cost_offset_mode)
+            
+            
+        if self.output_cost_offset_mode == 'none':
+            q = np.vstack((q, np.zeros((self.num_u,1))))
+        elif self.output_cost_offset_mode == 'uf':
+            for i in range(self.N): q = np.vstack([q, -self.R @ self.uf])
+        elif self.output_cost_offset_mode == 'auto':
+            if not self.time_varying:
+                u_offset = np.linalg.pinv(self.B) @((np.eye(self.dim_x) - self.A) @ self.xf - self.C)
+            for i in range(self.N): 
+                if self.time_varying:
+                    u_offset = np.linalg.pinv(self.B[i]) @((np.eye(self.dim_x) - self.A[i]) @ self.xf - self.C[i])
+                q = np.vstack([q, -self.R @ u_offset]) 
+        else: 
+            raise NotImplementedError('selected output cost offset mode is not implemented: "%s"'%self.output_cost_offset_mode)
+            
+        self.osqp_q[0:len(q)] = q
+        return
+            
     
     def update_model_matrices(self):
         if not self.model_update_flag: 
@@ -804,22 +847,64 @@ class MPCUtil():
         
         self.model_update_flag = False
         return
+    
+    
+    def update_ss(self):
+        if not self.use_ss:
+            return
+        if not self.ss_update_flag:
+            return
+            
+        self.osqp_q[self.index_lambda : self.index_lambda + self.num_ss] = self.ss_terminal_q
+        
+        new_ss_vec_data = np.concatenate(self.ss_terminal_vecs.T)
+        self.osqp_A.data[self.ss_vec_idxs] = np.expand_dims(new_ss_vec_data,1)
+        
+        self.ss_update_flag = False
+        return
         
     def update_local_constraints(self):
+        if not self.local_update_flag:
+            return
+            
         bx_l = np.vstack([self.loc_bx_l[i] for i in range(self.N)])
         bx_u = np.vstack([self.loc_bx_u[i] for i in range(self.N)])
         
         new_Ax_data = []
         for i in range(self.loc_Fx.shape[0]):
             new_Ax_data.append(np.concatenate(self.loc_Fx[i].T))
-        new_track_boundary_data = np.concatenate(new_Ax_data)
+        new_local_boundary_data = np.concatenate(new_Ax_data)
         
-        self.osqp_A.data[self.track_boundary_idxs] = np.expand_dims(new_track_boundary_data,1)
+        self.osqp_A.data[self.local_idxs] = np.expand_dims(new_local_boundary_data,1)
         
-        self.osqp_l[self.boundary_start_row:]   = bx_l
-        self.osqp_u[self.boundary_start_row:]   = bx_u
+        self.osqp_l[self.local_start_row:self.local_stop_row] = bx_l
+        self.osqp_u[self.local_start_row:self.local_stop_row] = bx_u
         
-            
+        self.local_update_flag = False
+        return
+    
+    def __str__(self):
+        print_str = '{'
+        print_str += 'OSQP MPC problem with:\n'
+        
+        print_str += '  dim_x               : %d\n'%self.dim_x
+        print_str += '  dim_u               : %d\n'%self.dim_u
+        print_str += '  N                   : %d\n'%self.N
+        print_str += '  num_ss              : %d\n'%self.num_ss
+        
+        print_str += '  Time Varying Model  : %s\n'% (True if self.time_varying else False)
+        print_str += '  Local Constraints   : %s\n'% (True if self.use_local_constraints else False)
+        print_str += '  Terminal Slack      : %s\n'% (True if self.use_terminal_slack else False)
+        print_str += '  Global Slack        : %s\n'% (True if self.use_global_slack else False)
+        print_str += '  Local Slack         : %s\n'% (True if self.use_local_slack else False)
+        
+        
+        print_str += '  Safe Set            : %s\n'% (True if self.use_ss else False)
+        print_str += '  Terminal Point      : %s\n'% (True if self.use_xf else False)
+        print_str += '  State Cost Offset   : %s\n'% self.state_cost_offset_mode
+        print_str += '  Output Cost Offset  : %s\n'% self.output_cost_offset_mode
+        print_str += '}'
+        return print_str
     
 class DroneMPCUtil(MPCUtil):
     '''
@@ -828,18 +913,21 @@ class DroneMPCUtil(MPCUtil):
     
     def __init__(self, N, dim_x, dim_u, 
                  num_ss = 50, 
-                 track = None, 
-                 time_varying = False, 
-                 num_local_constraints = 2):
-        super.__init__(self,N,dim_x,dim_u,num_ss,time_varying,num_local_constraints
+                 track = None):
+        super(DroneMPCUtil,self).__init__(N,dim_x,dim_u,num_ss,time_varying = False,num_local_constraints = 2)
         
         self.track = track
-        self.update_track_constraints()
+        #self.update_track_constraints()
         return
     
+    def setup(self):
+        self.update_track_constraints()
+        super(DroneMPCUtil,self).setup()
+        return
+        
     def update(self):
         if self.use_local_constraints: self.update_track_constraints()
-        super.update()
+        super(DroneMPCUtil,self).update()
         return
     
     def update_track_constraints(self): #locally linearized lane boundaries
@@ -847,8 +935,7 @@ class DroneMPCUtil(MPCUtil):
             raise TypeError('Cannot linearize track constraints without a track')
            
         bx_l, Ax, bx_u = self.linearize_track_boundaries() 
-        
-        self.set_local_constraints(self, np.array(Ax), np.array(bx_u), np.array(bx_l), E = self.loc_E, max_local_slack = self.max_local_slack)
+        self.set_local_constraints(np.array(Ax), np.array(bx_u), np.array(bx_l))
         return
         
     def linearize_track_boundaries(self):
@@ -865,7 +952,6 @@ class DroneMPCUtil(MPCUtil):
                 p = np.array(self.ss_terminal_vecs[[0,4,8],i+1])
                 
             bl,A,bu = self.track.linearize_boundary_constraints(p)
-            
             Aexp = np.zeros((3,self.dim_x))
             Aexp[:,[0,4,8]] = A
             
@@ -873,9 +959,9 @@ class DroneMPCUtil(MPCUtil):
             bl = bl[1:]
             bu = bu[1:]
             
-            bx_l.append(bl)
+            bx_l.append(np.expand_dims(bl,1))
             Ax.append(Aexp)
-            bx_u.append(bu)
+            bx_u.append(np.expand_dims(bu,1))
         return bx_l, Ax, bx_u
         
     
@@ -928,7 +1014,7 @@ def main():
     m.set_state_costs(Q, P, R, dR)
     m.set_slack_costs(Q_mu, Q_eps, b_eps)
     m.set_ss(ss_vecs, ss_q)
-    m.set_state_constraints(Fx, bx_u, bx_l, Fu, bu_u, bu_l, E)
+    m.set_global_constraints(Fx, bx_u, bx_l, Fu, bu_u, bu_l, E)
     
     m.setup()
     
