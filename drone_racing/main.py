@@ -7,10 +7,11 @@ from sim import drone_simulator
 from track import track as dt
 
 from LMPC import LMPC
+'''
 from LMPC.local_linearization import PredictiveModel
 from LMPC import initControllerParameters as ugo_parameters
 from LMPC import PredictiveModel as ugo_model
-from LMPC import PredictiveControllers as ugo_controller
+from LMPC import PredictiveControllers as ugo_controller'''
 
 from raceline.raceline import GlobalRaceline
 from raceline.ss_sampler import SSSampler
