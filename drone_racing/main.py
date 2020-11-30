@@ -236,7 +236,7 @@ def run_LQR_raceline(drone, track, raceline, show_plots = True):
     print('\n* Finished LQR Raceline (%0.2f seconds)*'%t)
     return x_list, u_list, q_list
 
-def run_MPC(drone, track, raceline, show_plots = True):
+def run_MPC(drone, track, raceline, show_plots = True, show_stats = True):
     print('* Starting MPC Raceline *')
     
     
@@ -412,17 +412,23 @@ def run_MPC(drone, track, raceline, show_plots = True):
     q_list = np.flip(q_list)
     u_list = np.array(u_list)
     print('\n* Finished MPC Raceline (%0.2f seconds)*'%t)
-    print('* Ran at ~ %0.2fHz'%(itr/(time.time() - t_start)))
-    print('Raceline time: %0.2f +/- %0.2f'%(np.mean(t_raceline)*1000, np.std(t_raceline)*1000))
-    print('Solve time: %0.2f +/- %0.2f'%(np.mean(t_solve)*1000, np.std(t_solve)*1000))
-    print('Convert time: %0.2f +/- %0.2f'%(np.mean(t_convert)*1000, np.std(t_convert)))
-    print('Update time: %0.2f +/- %0.2f'%(np.mean(t_update)*1000, np.std(t_update)*1000))
+    if show_stats:
+        print('* Ran at ~ %0.2fHz'%(itr/(time.time() - t_start)))
+        print('Raceline time: %0.2f +/- %0.2f'%(np.mean(t_raceline)*1000, np.std(t_raceline)*1000))
+        print('Solve time: %0.2f +/- %0.2f'%(np.mean(t_solve)*1000, np.std(t_solve)*1000))
+        print('Convert time: %0.2f +/- %0.2f'%(np.mean(t_convert)*1000, np.std(t_convert)))
+        print('Update time: %0.2f +/- %0.2f'%(np.mean(t_update)*1000, np.std(t_update)*1000))
     
     return x_list, u_list, q_list
 
 
 
-def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True):
+def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats = True, n_step = 1):
+    '''
+    show_plots - will plot drone and drone track while running a lap
+    show_stats - will print average solve time, update time, etc.. after finishing lap
+    n_step     - number of planned steps to execute after each solution
+    '''
     print('* Starting LMPC *')
     N = 30
     num_ss = 45
@@ -506,20 +512,27 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True):
     t = 0
     t_start = time.time()
     
+    t_ss = []
+    t_solve = []
+    t_convert = []
+    t_update = []
+    
     itr = 0
     lap_done = False
     lap_halfway = False
     while not lap_done:
+        t0 = time.time()
         m.set_x0(x)
         m.set_ss(ss_vecs, ss_q)
         m.update() 
+        t1 = time.time()
         
         if m.solve() == -1:
             m.update()
             if m.solve() == -1:
                 pdb.set_trace()
-            
-        n_step = 1
+        
+        t2 = time.time()
         
         for k in range(n_step):
             u = m.predicted_u[k:k+1]
@@ -541,6 +554,15 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True):
             x = drone.A_affine @ x + drone.B_affine @ u.T + drone.C_affine
             t += 0.05
             itr += 1
+        t3 = time.time()
+        ss_vecs, ss_q = ss_sampler.update(x)
+        t4 = time.time()
+        
+        
+        t_update.append(t1-t0)
+        t_solve.append(t2-t1)
+        t_convert.append(t3-t2)
+        t_ss.append(t4-t3)
         
         if itr % (10*n_step) == 0 and show_plots:
             fig.canvas.restore_region(bg)
@@ -562,7 +584,6 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True):
             fig.canvas.flush_events()
                 
         
-        ss_vecs, ss_q = ss_sampler.update(x)
         
         if not track.inside_track(p):
             print('Warning - out of track boundaries')
@@ -581,7 +602,17 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True):
     q_list = np.flip(q_list)
     u_list = np.array(u_list).squeeze()
     print('\n* Finished LMPC (%0.2f seconds)*'%t)
-    #print('* Ran at ~ %0.2fHz'%(itr/(time.time() - t_start)))
+    if show_stats:
+        print('n_step = %d'%n_step)
+        print('* Ran at ~ %0.2fHz'%(itr/(time.time() - t_start)))
+        print('SS sample time: %0.2f +/- %0.2f'%(np.mean(t_ss)*1000, np.std(t_ss)*1000))
+        print('Solve time: %0.2f +/- %0.2f'%(np.mean(t_solve)*1000, np.std(t_solve)*1000))
+        print('Convert time: %0.2f +/- %0.2f'%(np.mean(t_convert)*1000, np.std(t_convert)))
+        print('Update time: %0.2f +/- %0.2f'%(np.mean(t_update)*1000, np.std(t_update)*1000))
+        
+        
+        
+        
     return x_list, u_list, q_list
 
 def check_affine_feasibility(drone,x_data,u_data):
@@ -700,7 +731,7 @@ def main():
     x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_mpc, u_mpc, q_mpc, show_plots = False)
     #x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_lqr, u_lqr, q_lqr, show_plots = False)
     for j in range(3):
-        x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_lmpc, u_lmpc, q_lmpc, show_plots = False)
+        x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_lmpc, u_lmpc, q_lmpc, show_plots = False, show_stats = False)
         
     #run_ugo_LMPC(drone,track, x_list, u_list, q_list)'''
     
