@@ -16,7 +16,7 @@ class MPCUtil():
     Current Features:
         * Affine and linear time invariant and time varying models that can be updated rapidly
         * Quadratic state, output, and output rate costs as well as offsets for:
-            1. Terminal point constraint with state cost centered on terminal point
+            1. Terminal point constraint with state cost centered on a terminal point
             2. Reference control signal for affine models that require constant output
         * Global constraints that are active on every prediction step
         * Local constraints that are active for a specific prediction step and can be updated rapidly
@@ -36,9 +36,7 @@ class MPCUtil():
         
         
     '''
-    #TODO: Terminal set
-    #TODO: Clear distinction between global and local constraints
-    #TODO: slack variables for local constraints
+    #TODO: check slack variables for local constraints
     
     
     state_cost_offset_modes = ['none','auto','xf','ss']
@@ -770,7 +768,7 @@ class MPCUtil():
         return
         
     
-    def update_x0(self): #TODO update xf and uf as well depending on the cost mode
+    def update_x0(self): 
         if not self.x0_update_flag:
             return
             
