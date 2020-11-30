@@ -95,7 +95,6 @@ class MPCUtil():
         self.use_local_slack = False        # slack variable on local constraints'''
         
         
-        
         self.state_cost_offset_mode = 'auto'
         self.output_cost_offset_mode = 'auto'
         

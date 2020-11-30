@@ -58,7 +58,9 @@ def run_LQR_lap(drone, track, show_plots = True):
     t = 0
     p = np.array([0,0,0])
     
-    while s_tar - 25 < track.track_length:
+    lap_done = False
+    lap_halfway = False
+    while not lap_done:
         global_p, global_th, global_phi  = track.local_to_global_curvillinear(s_tar, 0, 0, 0, 0)
         #print('New Target: %s'%str(global_p))
         x_tar = np.zeros(x0.shape)
@@ -66,7 +68,7 @@ def run_LQR_lap(drone, track, show_plots = True):
         x_tar[4] = global_p[1]
         x_tar[8] = global_p[2]
         
-        while np.linalg.norm(global_p - p) > 10: # s_tar - s > 10:
+        while np.linalg.norm(global_p - p) > 10 and not lap_done:
             u = -K @ (x - x_tar)
             
             x_list.append(x.squeeze())
@@ -97,10 +99,14 @@ def run_LQR_lap(drone, track, show_plots = True):
                 fig.canvas.draw()
                 fig.canvas.flush_events()
             itr += 1
+            if s > track.track_length/2 and s < 3.0/4*track.track_length:  
+                lap_halfway = True
+            elif lap_halfway:
+                if s < 10:
+                    lap_done = True
             
         s_tar += 15
         print('LQR Progress: (%6.2f/%0.2f)'%(s_tar, track.track_length + 25), end = '\r')
-         
     
     if show_plots:
         plt.ioff()
@@ -165,8 +171,9 @@ def run_LQR_raceline(drone, track, raceline, show_plots = True):
     
     t = 0
     p = np.array([0,0,0])
-    
-    while s_tar  < track.track_length:
+    lap_done = False
+    lap_halfway = False
+    while not lap_done:
         x_tar, u_tar, s_tar = raceline.update_target(s) 
         
         
@@ -200,7 +207,11 @@ def run_LQR_raceline(drone, track, raceline, show_plots = True):
         itr += 1
         
         print('LQR Raceline Progress: (%6.2f/%0.2f)'%(s_tar, track.track_length), end = '\r')
-    
+        if s > track.track_length/2 and s < 3.0/4*track.track_length:  
+            lap_halfway = True
+        elif lap_halfway:
+            if s < 10:
+                lap_done = True
     
     if show_plots:
         plt.ioff()
@@ -215,6 +226,7 @@ def run_LQR_raceline(drone, track, raceline, show_plots = True):
         ax.plot(t_list,e_z_list)
         plt.title('LQR raceline vertical error vs. time')
         plt.show()
+        
     
     x_list = np.array(x_list)
     q_list = np.array(t_list)
@@ -408,6 +420,8 @@ def run_MPC(drone, track, raceline, show_plots = True):
     
     return x_list, u_list, q_list
 
+
+
 def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True):
     print('* Starting LMPC *')
     N = 30
@@ -448,16 +462,16 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True):
     
     ss_vecs, ss_q = ss_sampler.update(x0)
     
-    m = LMPC.MPCUtil(N, dim_x, dim_u, num_ss = num_ss, track = track)
+    m = LMPC.DroneMPCUtil(N, dim_x, dim_u, num_ss = num_ss, track = track)
     
     m.set_model_matrices(drone.A_affine, drone.B_affine, drone.C_affine)
     m.set_x0(x0)
     m.set_state_costs(Q, P, R, dR)
     m.set_slack_costs(Q_mu, Q_eps, b_eps)
     m.set_ss(ss_vecs, ss_q)
-    m.set_state_constraints(Fx, bx_u, bx_l, Fu, bu_u, bu_l, E)
+    m.set_global_constraints(Fx, bx_u, bx_l, Fu, bu_u, bu_l, E)
     
-    m.setup()
+    m.setup_LMPC()
     
     x = x0.copy()
     p = np.array([x[0], x[4], x[8]]).squeeze()
@@ -552,9 +566,9 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True):
         
         if not track.inside_track(p):
             print('Warning - out of track boundaries')
-            print('MPC Raceline Progress: (%6.2f/%0.2f)'%(s, track.track_length), end = '\n')
+            print('LMPC Progress: (%6.2f/%0.2f)'%(s, track.track_length), end = '\n')
         else:
-            print('MPC Raceline Progress: (%6.2f/%0.2f)'%(s, track.track_length), end = '\r')
+            print('LMPC Progress: (%6.2f/%0.2f)'%(s, track.track_length), end = '\r')
         
         if s > track.track_length/2 and s < 3.0/4*track.track_length:  
             lap_halfway = True
@@ -672,7 +686,7 @@ def main():
         np.savez('lqr_raceline_data.npz', x  = x_lqr_raceline, u = u_lqr_raceline, q = q_lqr_raceline)
     
     
-    if False: # os.path.exists('mpc_data.npz'):
+    if os.path.exists('mpc_data.npz'):
         data = np.load('mpc_data.npz')
         x_mpc = data['x']
         u_mpc = data['u']
@@ -680,13 +694,13 @@ def main():
     else:
         lqr_raceline.p_window = 70
         lqr_raceline.window = 20
-        x_mpc, u_mpc, q_mpc = run_MPC(drone, track, lqr_raceline, show_plots = True)
+        x_mpc, u_mpc, q_mpc = run_MPC(drone, track, lqr_raceline, show_plots = False)
         np.savez('mpc_data.npz', x  = x_mpc, u = u_mpc, q = q_mpc)
     
-    #x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_mpc, u_mpc, q_mpc, show_plots = True)
-    #x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_lqr, u_lqr, q_lqr, show_plots = True)
-    #for j in range(2):
-    #    x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_lmpc, u_lmpc, q_lmpc, show_plots = False)
+    x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_mpc, u_mpc, q_mpc, show_plots = False)
+    #x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_lqr, u_lqr, q_lqr, show_plots = False)
+    for j in range(3):
+        x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_lmpc, u_lmpc, q_lmpc, show_plots = False)
         
     #run_ugo_LMPC(drone,track, x_list, u_list, q_list)'''
     

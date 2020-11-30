@@ -88,7 +88,6 @@ class DroneSim():
         
         if time.time() - t0 >= tf*0.99:
             print('Warning - brute force lqr timed out, tol = %f'%tol)
-            print(Pn - P)
         return Pn
     
     def test_controllability(self):
