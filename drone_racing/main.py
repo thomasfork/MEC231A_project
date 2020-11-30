@@ -318,15 +318,23 @@ def run_MPC(drone, track, raceline, show_plots = True):
     
     lap_done = False
     lap_halfway = False
+    
+    t_raceline = []
+    t_solve = []
+    t_convert = []
+    t_update = []
     while not lap_done:
-            
+        t0 = time.time()
         x_tar, u_tar, s_tar = raceline.update_target(s) 
         #x_tar, u_tar, s_tar = raceline.update_p_target(p) 
         
         x_tar = x_tar[0:dim_x]
         
+        t1 = time.time()
         if m.solve() == -1:
             pdb.set_trace()
+            
+        t2 = time.time()
         u = np.array(m.predicted_u[0])
         
         t_list.append(t)
@@ -345,9 +353,17 @@ def run_MPC(drone, track, raceline, show_plots = True):
         s_prev = s
         s, e_y, e_z, e_th, e_phi = track.global_to_local_waypoint(p, 0, 0)
         
+        t3 = time.time()
         m.set_x0(x,x_tar)
         m.update()   
         
+        
+        t4 = time.time()
+        
+        t_raceline.append(t1-t0)
+        t_solve.append(t2-t1)
+        t_convert.append(t3-t2)
+        t_update.append(t4-t3)
         
         if itr % 1000 == 0 and show_plots:
             fig.canvas.restore_region(bg)
@@ -385,6 +401,11 @@ def run_MPC(drone, track, raceline, show_plots = True):
     u_list = np.array(u_list)
     print('\n* Finished MPC Raceline (%0.2f seconds)*'%t)
     print('* Ran at ~ %0.2fHz'%(itr/(time.time() - t_start)))
+    print('Raceline time: %0.2f +/- %0.2f'%(np.mean(t_raceline)*1000, np.std(t_raceline)*1000))
+    print('Solve time: %0.2f +/- %0.2f'%(np.mean(t_solve)*1000, np.std(t_solve)*1000))
+    print('Convert time: %0.2f +/- %0.2f'%(np.mean(t_convert)*1000, np.std(t_convert)))
+    print('Update time: %0.2f +/- %0.2f'%(np.mean(t_update)*1000, np.std(t_update)*1000))
+    
     return x_list, u_list, q_list
 
 def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True):
