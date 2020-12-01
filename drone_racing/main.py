@@ -286,7 +286,7 @@ def run_MPC(drone, track, raceline, show_plots = True, show_stats = True):
     
     
     x0 = np.zeros((10,1))
-    
+    uf = np.array([[0,0,14]]).T
     
     x = x0.copy()
     p = np.array([x[0], x[4], x[8]]).squeeze()
@@ -297,9 +297,9 @@ def run_MPC(drone, track, raceline, show_plots = True, show_stats = True):
     x_tar = x_tar[0:dim_x]
     
     m = LMPC.DroneMPCUtil(N, dim_x, dim_u, num_ss = num_ss, track = track)
-    
+    m.set_state_cost_offset_modes(output_offset = 'uf')
     m.set_model_matrices(drone.A_affine, drone.B_affine, drone.C_affine)
-    m.set_x0(x,x_tar)
+    m.set_x0(x,x_tar,uf = uf)
     m.set_state_costs(Q, P, R, dR)
     m.set_slack_costs(Q_mu, Q_eps, b_eps)
     m.set_ss(ss_vecs, ss_q)
@@ -366,7 +366,7 @@ def run_MPC(drone, track, raceline, show_plots = True, show_stats = True):
         s, e_y, e_z, e_th, e_phi = track.global_to_local_waypoint(p, 0, 0)
         
         t3 = time.time()
-        m.set_x0(x,x_tar)
+        m.set_x0(x,x_tar,uf = uf)
         m.update()   
         
         
@@ -462,16 +462,16 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats
     E[8] = 1
     
     x0 = np.zeros((dim_x,1))
-    
+    uf = np.array([[0,0,14]]).T
     
     ss_sampler = SSSampler(num_ss,x_data, u_data, q_data, q_scaling = 10000, drone = drone)
     
     ss_vecs, ss_q = ss_sampler.update(x0)
     
     m = LMPC.DroneMPCUtil(N, dim_x, dim_u, num_ss = num_ss, track = track)
-    
+    m.set_state_cost_offset_modes(output_offset = 'uf')
     m.set_model_matrices(drone.A_affine, drone.B_affine, drone.C_affine)
-    m.set_x0(x0)
+    m.set_x0(x0,uf = uf)
     m.set_state_costs(Q, P, R, dR)
     m.set_slack_costs(Q_mu, Q_eps, b_eps)
     m.set_ss(ss_vecs, ss_q)
@@ -522,7 +522,7 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats
     lap_halfway = False
     while not lap_done:
         t0 = time.time()
-        m.set_x0(x)
+        m.set_x0(x,uf = uf)
         m.set_ss(ss_vecs, ss_q)
         m.update() 
         t1 = time.time()

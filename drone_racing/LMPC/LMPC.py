@@ -37,7 +37,7 @@ class MPCUtil():
         
     '''
     #TODO: check slack variables for local constraints
-    
+    #TODO: Implement OBCA
     
     state_cost_offset_modes = ['none','auto','xf','ss']
     output_cost_offset_modes = ['none','auto','uf']
@@ -164,7 +164,7 @@ class MPCUtil():
         self.dR = dR # output rate cost
         return
     
-    def set_state_cost_offset_modes(state_offset = 'auto', output_offset = 'auto'):
+    def set_state_cost_offset_modes(self,state_offset = 'auto', output_offset = 'auto'):
         if state_offset in self.state_cost_offset_modes:
             self.state_cost_offset_mode = state_offset
         else:
@@ -622,6 +622,7 @@ class MPCUtil():
         if self.verbose:
             print('Set up new MPC Problem:')
             print(self.__str__())
+            
         return
     
     def setup_LMPC(self):
