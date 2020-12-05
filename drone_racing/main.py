@@ -447,6 +447,7 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats
     Q_mu = 1000000 * np.eye(dim_x) 
     Q_eps = 100 * np.eye(N) 
     b_eps = np.zeros((N,1))
+    Q_eta = 10000 * np.eye(N)
     
     Fx = np.eye(dim_x) 
     bx_u =  np.array([[200,50,50,50,200,50,50,50,200,50]]).T
@@ -473,7 +474,7 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats
     m.set_model_matrices(drone.A_affine, drone.B_affine, drone.C_affine)
     m.set_x0(x0,uf = uf)
     m.set_state_costs(Q, P, R, dR)
-    m.set_slack_costs(Q_mu, Q_eps, b_eps)
+    m.set_slack_costs(Q_mu, Q_eps, b_eps, Q_eta)
     m.set_ss(ss_vecs, ss_q)
     m.set_global_constraints(Fx, bx_u, bx_l, Fu, bu_u, bu_l, E)
     
@@ -508,6 +509,8 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats
     e_z_list = []
     e_th_list = []
     e_phi_list = []
+    
+    cum_slack_violation = 0
     
     t = 0
     t_start = time.time()
@@ -550,6 +553,7 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats
             e_th_list.append(e_th)
             e_phi_list.append(e_phi)
             
+            cum_slack_violation += np.linalg.norm(m.predicted_eta[k]) 
             
             x = drone.A_affine @ x + drone.B_affine @ u.T + drone.C_affine
             t += 0.05
@@ -586,8 +590,8 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats
         
         
         if not track.inside_track(p):
-            print('Warning - out of track boundaries')
-            print('LMPC Progress: (%6.2f/%0.2f)'%(s, track.track_length), end = '\n')
+            #print('Warning - out of track boundaries')
+            print('LMPC Progress: (%6.2f/%0.2f)'%(s, track.track_length), end = '\r')
         else:
             print('LMPC Progress: (%6.2f/%0.2f)'%(s, track.track_length), end = '\r')
         
@@ -602,6 +606,7 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats
     q_list = np.flip(q_list)
     u_list = np.array(u_list).squeeze()
     print('\n* Finished LMPC (%0.2f seconds)*'%t)
+    print('Total Lane Boundary Violation: %0.2f'%cum_slack_violation) 
     if show_stats:
         print('n_step = %d'%n_step)
         print('* Ran at ~ %0.2fHz'%(itr/(time.time() - t_start)))
@@ -728,9 +733,9 @@ def main():
         x_mpc, u_mpc, q_mpc = run_MPC(drone, track, lqr_raceline, show_plots = False)
         np.savez('mpc_data.npz', x  = x_mpc, u = u_mpc, q = q_mpc)
     
-    x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_mpc, u_mpc, q_mpc, show_plots = False)
-    #x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_lqr, u_lqr, q_lqr, show_plots = False)
-    for j in range(3):
+    #x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_mpc, u_mpc, q_mpc, show_plots = False)
+    x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_lqr, u_lqr, q_lqr, show_plots = False)
+    for j in range(10):
         x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_lmpc, u_lmpc, q_lmpc, show_plots = False, show_stats = False)
         
     #run_ugo_LMPC(drone,track, x_list, u_list, q_list)'''

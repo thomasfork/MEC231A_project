@@ -352,7 +352,7 @@ class MPCUtil():
             
         #Output cost offset 
         if self.output_cost_offset_mode == 'none':
-            q = np.vstack([q, np.zeros((self.dim_u,1))])
+            q = np.vstack([q, np.zeros((self.num_u,1))])
         elif self.output_cost_offset_mode == 'uf':
             for i in range(self.N): q = np.vstack([q, -self.R @ self.uf])
         elif self.output_cost_offset_mode == 'auto':
@@ -364,7 +364,8 @@ class MPCUtil():
                 q = np.vstack([q, -self.R @ u_offset]) 
         else: 
             raise NotImplementedError('selected output cost offset mode is not implemented: "%s"'%self.output_cost_offset_mode)
-            
+        
+        assert P.shape[0] == q.shape[0]
             
         #Extra costs
         if self.use_ss: 
@@ -382,7 +383,10 @@ class MPCUtil():
         if self.use_local_slack:
             P = sparse.block_diag([P, self.Q_eta])
             q = np.vstack([q, np.zeros((self.num_eta,1))]) 
-            
+        
+        
+        assert P.shape[0] == q.shape[0]
+        
         self.osqp_P = sparse.csc_matrix(P)
         self.osqp_q = q
         return
@@ -546,22 +550,19 @@ class MPCUtil():
             self.local_stop_col = A.shape[1]
             self.local_start_row = Aineq.shape[0] + Aeq.shape[0]  #needed to find indices that correspond to boundary constraints once osqp_A is fully built
                 
+            pad = Aineq.shape[1] - A.shape[1]
+            A = sparse.hstack([A, sparse.csc_matrix((A.shape[0], pad))])
+            
             if self.use_local_slack:
-                pad = Aineq.shape[1] - A.shape[1]
-                A = sparse.hstack([A, sparse.csc_matrix((A.shape[0], pad))])
                 
                 eta = sparse.block_diag([self.loc_E[i] for i in range(self.N)])
                 A = sparse.hstack([A, eta])
                 
-                Aineq = sparse.hstack([Aineq, sparse.csc_marix((Aineq.shape[0], self.num_eta))])  # pad Aineq for eta
-                Aineq = sparse.vstack([Aineq, A])
+                Aineq = sparse.hstack([Aineq, sparse.csc_matrix((Aineq.shape[0], self.num_eta))])  # pad Aineq for eta
                 
-            else:
-                pad = Aineq.shape[1] - A.shape[1]
-                A = sparse.hstack([A, sparse.csc_matrix((A.shape[0], pad))])
-                Aineq = sparse.vstack([Aineq, A])
-                lineq = np.vstack([lineq,bx_l])
-                uineq = np.vstack([uineq,bx_u])
+            Aineq = sparse.vstack([Aineq, A])
+            lineq = np.vstack([lineq,bx_l])
+            uineq = np.vstack([uineq,bx_u])
             
             self.local_stop_row  = Aineq.shape[0] + Aeq.shape[0]  #needed to find indices that correspond to boundary constraints 
             
@@ -634,7 +635,7 @@ class MPCUtil():
         self.use_local_constraints = True
         self.use_terminal_slack = True
         self.use_global_slack = False
-        self.use_local_slack = False
+        self.use_local_slack = True
         
         self.setup()
         return
@@ -822,7 +823,6 @@ class MPCUtil():
             Bx_data = Bx_data.T.reshape(-1,1)
             model_data = np.vstack([Ax_data, Bx_data])
             self.osqp_A.data[self.model_idxs] = model_data
-            pdb.set_trace()
             
             return
         else:
@@ -962,7 +962,271 @@ class DroneMPCUtil(MPCUtil):
             bx_u.append(np.expand_dims(bu,1))
         return bx_l, Ax, bx_u
         
+        
+        
+        
+
+class RacecarMPCUtil(MPCUtil):
+    '''
+    MPCUtil with interface to Racecar LMPC code from Ugo Rosolia 
+    Largely copy-paste of Ugo's code with glue code for syntax conventions used here. 
+    '''    
     
+    def __init__(self, numSS_Points, numSS_it, QterminalSlack, lmpcParameters, lmpcpredictiveModel):
+        self.N      = lmpcParameters.N
+        self.Qslack = lmpcParameters.Qslack
+        #self.Q      = lmpcParameters.Q
+        #self.Qf     = lmpcParameters.Qf
+        #self.R      = lmpcParameters.R
+        #self.dR     = lmpcParameters.dR
+        self.n      = lmpcParameters.n
+        self.d      = lmpcParameters.d
+        #self.A      = lmpcParameters.A
+        #self.B      = lmpcParameters.B
+        #self.Fx     = lmpcParameters.Fx
+        #self.Fu     = lmpcParameters.Fu
+        #self.bx     = lmpcParameters.bx
+        #self.bu     = lmpcParameters.bu
+        #self.xRef   = lmpcParameters.xRef
+        
+        #self.slacks          = mpcParameters.slacks
+        #self.timeVarying     = mpcParameters.timeVarying
+        self.predictiveModel = lmpcpredictiveModel
+        
+        
+        self.xLin = self.predictiveModel.xStored[-1][0:self.N+1,:]
+        self.uLin = self.predictiveModel.uStored[-1][0:self.N,:]
+            
+        self.numSS_Points = numSS_Points
+        self.numSS_it     = numSS_it
+        #self.QterminalSlack = QterminalSlack
+        
+        self.LapTime = []        # Time at which each j-th iteration is completed
+        self.SS         = []    # Sampled Safe SS
+        self.uSS        = []    # Input associated with the points in SS
+        self.Qfun       = []       # Qfun: cost-to-go from each point in SS
+        self.SS_glob    = []   # SS in global (X-Y) used for plotting
+        
+        self.zt = np.array([0.0, 0.0, 0.0, 0.0, 10.0, 0.0])
+        self.it      = 0
+        self.timeStep = 0
+        
+        self.xPred    = []
+        
+        super(RacecarMPCUtil,self).__init__(lmpcParameters.N, lmpcParameters.n, lmpcParameters.d, numSS_Points, time_varying = True, num_local_constraints = 2)
+        
+        self.set_state_cost_offset_modes('none','none')
+        #m.set_model_matrices(drone.A_affine, drone.B_affine, drone.C_affine)
+        self.set_state_costs(Q = lmpcParameters.Q,
+                          P = lmpcParameters.Qf, 
+                          R = lmpcParameters.R, 
+                          dR= np.diag(lmpcParameters.dR))
+                          
+        self.set_slack_costs(Q_mu  = QterminalSlack, 
+                          Q_eps = lmpcParameters.Qslack[0] * np.eye(lmpcParameters.N), 
+                          b_eps = lmpcParameters.Qslack[1] * np.ones((lmpcParameters.N,1)))
+        #m.set_ss(ss_vecs, ss_q)
+        self.set_global_constraints(Fx   = lmpcParameters.Fx, 
+                                 bx_u = lmpcParameters.bx[0], 
+                                 bx_l = -np.inf * np.ones((lmpcParameters.bx[0].shape)), 
+                                 Fu   = lmpcParameters.Fu, 
+                                 bu_u = lmpcParameters.bu, 
+                                 bu_l = -np.inf * np.ones((lmpcParameters.bu.shape)), 
+                                 E    = np.ones((lmpcParameters.bx[0].shape)))
+        
+        self.xStoredPredTraj     = []
+        self.xStoredPredTraj_it  = []
+        self.uStoredPredTraj     = []
+        self.uStoredPredTraj_it  = []
+        self.SSStoredPredTraj    = []
+        self.SSStoredPredTraj_it = []
+        return
+    
+    def setup(self):
+        x0 = np.array([[0,0,0,0,0,0]]).T
+        self.computeLTVdynamics()
+        self.set_x0(x0)
+        self.addTerminalSS(x0)
+        
+        self.use_ss = True
+        self.use_xf = False
+        self.use_local_constraints = False
+        self.use_terminal_slack = True
+        self.use_global_slack = True
+        self.use_local_slack = False
+        
+        super(RacecarMPCUtil,self).setup()
+        return
+        
+    def solve(self,x0):
+        #TODO update x0, ss, then solve and unpack solution with xPred, uPred format
+        self.set_x0(np.expand_dims(x0,1))
+        
+        self.computeLTVdynamics()
+        self.addTerminalSS(np.expand_dims(x0,1))
+        
+        self.update()
+        super(RacecarMPCUtil,self).solve()
+        
+        
+        self.xPred = self.predicted_x
+        self.uPred = self.predicted_u
+        self.zt   = self.xPred[-1,:]
+        self.zt_u = self.uPred[-1,:]
+        self.xLin = np.vstack((self.xPred[1:, :], self.zt))
+        self.uLin = np.vstack((self.uPred[1:, :], self.zt_u))
+        
+        return
+        
+    def computeLTVdynamics(self):
+        # Estimate system dynamics
+        A = []
+        B = []
+        C = []
+        for i in range(0, self.N):
+            Ai, Bi, Ci = self.predictiveModel.regressionAndLinearization(self.xLin[i], self.uLin[i])
+            A.append(Ai)
+            B.append(Bi)
+            C.append(np.expand_dims(Ci,1))
+        self.set_model_matrices(np.array(A), np.array(B), np.array(C))
+        return
+    
+    def addTerminalSS(self,x0):
+        """add terminal constraint and terminal cost
+        Arguments:
+            x: initial condition
+        
+        """        
+        # Update zt and xLin is they have crossed the finish line. We want s \in [0, TrackLength]
+        if (self.zt[4]-x0[4] > self.predictiveModel.map.TrackLength/2):
+            self.zt[4] = np.max([self.zt[4] - self.predictiveModel.map.TrackLength,0])
+            self.xLin[4,-1] = self.xLin[4,-1]- self.predictiveModel.map.TrackLength
+        sortedLapTime = np.argsort(np.array(self.LapTime))
+
+        # Select Points from historical data. These points will be used to construct the terminal cost function and constraint set
+        SS_PointSelectedTot = np.empty((self.n, 0))
+        Succ_SS_PointSelectedTot = np.empty((self.n, 0))
+        Succ_uSS_PointSelectedTot = np.empty((self.d, 0))
+        Qfun_SelectedTot = np.empty((0))
+        for jj in sortedLapTime[0:self.numSS_it]:
+            SS_PointSelected, uSS_PointSelected, Qfun_Selected = self.selectPoints(jj, self.zt, self.numSS_Points / self.numSS_it + 1)
+            Succ_SS_PointSelectedTot =  np.append(Succ_SS_PointSelectedTot, SS_PointSelected[:,1:], axis=1)
+            Succ_uSS_PointSelectedTot =  np.append(Succ_uSS_PointSelectedTot, uSS_PointSelected[:,1:], axis=1)
+            SS_PointSelectedTot      = np.append(SS_PointSelectedTot, SS_PointSelected[:,0:-1], axis=1)
+            Qfun_SelectedTot         = np.append(Qfun_SelectedTot, Qfun_Selected[0:-1], axis=0)
+            
+            
+        self.set_ss(SS_PointSelectedTot, np.expand_dims(Qfun_SelectedTot,1))
+        
+        '''
+        self.Succ_SS_PointSelectedTot = Succ_SS_PointSelectedTot
+        self.Succ_uSS_PointSelectedTot = Succ_uSS_PointSelectedTot
+        self.SS_PointSelectedTot = SS_PointSelectedTot
+        self.Qfun_SelectedTot = Qfun_SelectedTot
+        
+        # Update terminal set and cost
+        self.addSafeSetEqConstr()
+        self.addSafeSetCost()'''
+        return
+        
+        
+    def addPoint(self, x, u):
+        """at iteration j add the current point to SS, uSS and Qfun of the previous iteration
+        Arguments:
+            x: current state
+            u: current input
+        """
+        self.SS[self.it - 1]  = np.append(self.SS[self.it - 1], np.array([x + np.array([0, 0, 0, 0, self.predictiveModel.map.TrackLength, 0])]), axis=0)
+        self.uSS[self.it - 1] = np.append(self.uSS[self.it - 1], np.array([u]),axis=0)
+        self.Qfun[self.it - 1] = np.append(self.Qfun[self.it - 1], self.Qfun[self.it - 1][-1]-1)
+        # The above two lines are needed as the once the predicted trajectory has crossed the finish line the goal is
+        # to reach the end of the lap which is about to start
+        return
+        
+    def addTrajectory(self, x, u, x_glob):
+        """update iteration index and construct SS, uSS and Qfun
+        Arguments:
+            x: closed-loop trajectory
+            u: applied inputs
+            x_gloab: closed-loop trajectory in global frame
+        """
+        self.LapTime.append(x.shape[0])
+        self.SS.append(x)
+        self.SS_glob.append(x_glob)
+        self.uSS.append(u)
+        self.Qfun.append(self.computeCost(x,u))
+
+        if self.it == 0:
+            self.xLin = self.SS[self.it][1:self.N + 2, :]
+            self.uLin = self.uSS[self.it][1:self.N + 1, :]
+
+        self.xStoredPredTraj.append(self.xStoredPredTraj_it)
+        self.xStoredPredTraj_it = []
+
+        self.uStoredPredTraj.append(self.uStoredPredTraj_it)
+        self.uStoredPredTraj_it = []
+
+        self.SSStoredPredTraj.append(self.SSStoredPredTraj_it)
+        self.SSStoredPredTraj_it = []
+
+        self.it = self.it + 1
+        self.timeStep = 0
+        
+    def computeCost(self, x, u):
+        """compute roll-out cost
+        Arguments:
+            x: closed-loop trajectory
+            u: applied inputs
+        """
+        Cost = 10000 * np.ones((x.shape[0]))  # The cost has the same elements of the vector x --> time +1
+        # Now compute the cost moving backwards in a Dynamic Programming (DP) fashion.
+        # We start from the last element of the vector x and we sum the running cost
+        for i in range(0, x.shape[0]):
+            if (i == 0):  # Note that for i = 0 --> pick the latest element of the vector x
+                Cost[x.shape[0] - 1 - i] = 0
+            elif x[x.shape[0] - 1 - i, 4]< self.predictiveModel.map.TrackLength:
+                Cost[x.shape[0] - 1 - i] = Cost[x.shape[0] - 1 - i + 1] + 1
+            else:
+                Cost[x.shape[0] - 1 - i] = 0
+
+        return Cost    
+    def selectPoints(self, it, zt, numPoints):
+        """selecte (numPoints)-nearest neivbor to zt. These states will be used to construct the safe set and the value function approximation
+        Arguments:
+            x: current state
+            u: current input
+        """
+        x = self.SS[it]
+        u = self.uSS[it]
+        oneVec = np.ones((x.shape[0], 1))
+        x0Vec = (np.dot(np.array([zt]).T, oneVec.T)).T
+        diff = x - x0Vec
+        norm = np.linalg.norm(diff, 1, axis=1)
+        MinNorm = np.argmin(norm)
+
+        if (MinNorm - numPoints/2 >= 0):
+            indexSSandQfun = range(-int(numPoints/2) + MinNorm, int(numPoints/2) + MinNorm + 1)
+        else:
+            indexSSandQfun = range(MinNorm, MinNorm + int(numPoints))
+
+        SS_Points  = x[indexSSandQfun, :].T
+        SSu_Points = u[indexSSandQfun, :].T
+        Sel_Qfun = self.Qfun[it][indexSSandQfun]
+
+        # Modify the cost if the predicion has crossed the finisch line
+        if self.xPred == []:
+            Sel_Qfun = self.Qfun[it][indexSSandQfun]
+        elif (np.all((self.xPred[:, 4] > self.predictiveModel.map.TrackLength) == False)):
+            Sel_Qfun = self.Qfun[it][indexSSandQfun]
+        elif it < self.it - 1:
+            Sel_Qfun = self.Qfun[it][indexSSandQfun] + self.Qfun[it][0]
+        else:
+            sPred = self.xPred[:, 4]
+            predCurrLap = self.N - sum(sPred > self.predictiveModel.map.TrackLength)
+            currLapTime = self.timeStep
+            Sel_Qfun = self.Qfun[it][indexSSandQfun] + currLapTime + predCurrLap
+
+        return SS_Points, SSu_Points, Sel_Qfun         
         
 def main():
     N = 5

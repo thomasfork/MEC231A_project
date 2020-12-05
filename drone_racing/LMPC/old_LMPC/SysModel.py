@@ -43,9 +43,11 @@ class Simulator():
             x_cl_glob.append(xt_glob)
 
             if (self.multiLap == False) and ( x_cl[-1][4] > (self.map.TrackLength)):
-                print("Lap completed")
                 flagExt = True
             i += 1
+            
+            if self.flagLMPC == True:
+                print(xt[4])   
 
         xF = [np.array(x_cl[-1]) - np.array([0, 0, 0, 0, self.map.TrackLength, 0]), np.array(x_cl_glob[-1])]
         x_cl.pop()
