@@ -104,13 +104,14 @@ class DroneSim():
     def test_lqr_response(self):
         Q = 1*np.eye(10)
         R = 1*np.eye(3)
-        K = self.LQR(Q,R)
+        P,K = self.LQR(Q,R)
         
         x0 = np.ones((10,1))
         x0[8] = 10
         x0 = np.vstack([x0, 1])
         xtar = np.zeros(x0.shape)
         xtar[0] = 40
+        xtar[-1] = 1
         
         N = 400
         x = np.zeros((10,N))

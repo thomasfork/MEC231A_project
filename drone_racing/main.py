@@ -129,7 +129,7 @@ def run_LQR_lap(drone, track, show_plots = True):
     #pdb.set_trace()
     
     
-    print('\n* Finished LQR (%0.2f seconds)*'%t)
+    print('* Finished LQR (%0.2f seconds)*        '%t)
     return x_list, u_list, q_list
 
 def run_LQR_raceline(drone, track, raceline, show_plots = True):
@@ -233,7 +233,7 @@ def run_LQR_raceline(drone, track, raceline, show_plots = True):
     q_list = np.flip(q_list)
     u_list = np.array(u_list)
     
-    print('\n* Finished LQR Raceline (%0.2f seconds)*'%t)
+    print('* Finished LQR Raceline (%0.2f seconds)*          '%t)
     return x_list, u_list, q_list
 
 def run_MPC(drone, track, raceline, show_plots = True, show_stats = True):
@@ -360,6 +360,8 @@ def run_MPC(drone, track, raceline, show_plots = True, show_stats = True):
         
         
         x = drone.A_affine @ x + drone.B_affine @ u[None].T + drone.C_affine
+        
+        
         t += 0.05
         p = np.array([x[0], x[4], x[8]]).squeeze()
         s_prev = s
@@ -396,8 +398,8 @@ def run_MPC(drone, track, raceline, show_plots = True, show_stats = True):
         itr += 1
         
         if not track.inside_track(p):
-            print('Warning - out of track boundaries')
-            print('MPC Raceline Progress: (%6.2f/%0.2f)'%(s, track.track_length), end = '\n')
+            #print('Warning - out of track boundaries')
+            print('MPC Raceline Progress: (%6.2f/%0.2f)'%(s, track.track_length), end = '\r')
         else:
             print('MPC Raceline Progress: (%6.2f/%0.2f)'%(s, track.track_length), end = '\r')
         
@@ -411,7 +413,7 @@ def run_MPC(drone, track, raceline, show_plots = True, show_stats = True):
     q_list = np.array(t_list)
     q_list = np.flip(q_list)
     u_list = np.array(u_list)
-    print('\n* Finished MPC Raceline (%0.2f seconds)*'%t)
+    print('* Finished MPC Raceline (%0.2f seconds)           *'%t)
     if show_stats:
         print('* Ran at ~ %0.2fHz'%(itr/(time.time() - t_start)))
         print('Raceline time: %0.2f +/- %0.2f'%(np.mean(t_raceline)*1000, np.std(t_raceline)*1000))
@@ -431,17 +433,17 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats
     '''
     print('* Starting LMPC *')
     N = 30
-    num_ss = 45
+    num_ss = 60
     dim_x = 10
     dim_u = 3
     
     # lmpc works with affine models rather than linearized affine models so strip the extra datapoint if present
     x_data = x_data[:,:dim_x]
     
-    Q = np.eye(dim_x) 
-    R = np.eye(dim_u) * 0.1
+    Q = np.eye(dim_x) * 0
+    R = np.eye(dim_u) * 0.1  *0
     dR = R * 0 
-    P = Q
+    P = Q * 0
     
     
     Q_mu = 1000000 * np.eye(dim_x) 
@@ -462,10 +464,11 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats
     E[4] = 1
     E[8] = 1
     
+    ss_sampler = SSSampler(num_ss,x_data, u_data, q_data, q_scaling = 10000, drone = drone)
+    
     x0 = np.zeros((dim_x,1))
     uf = np.array([[0,0,14]]).T
     
-    ss_sampler = SSSampler(num_ss,x_data, u_data, q_data, q_scaling = 10000, drone = drone)
     
     ss_vecs, ss_q = ss_sampler.update(x0)
     
@@ -532,8 +535,9 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats
         
         if m.solve() == -1:
             m.update()
-            if m.solve() == -1:
-                pdb.set_trace()
+            m.solve()
+            #if m.solve() == -1:
+                #pdb.set_trace()
         
         t2 = time.time()
         
@@ -555,8 +559,13 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats
             
             cum_slack_violation += np.linalg.norm(m.predicted_eta[k]) 
             
+            
+            
             x = drone.A_affine @ x + drone.B_affine @ u.T + drone.C_affine
             t += 0.05
+            
+            
+            
             itr += 1
         t3 = time.time()
         ss_vecs, ss_q = ss_sampler.update(x)
@@ -605,7 +614,7 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats
     q_list = np.array(t_list).squeeze()
     q_list = np.flip(q_list)
     u_list = np.array(u_list).squeeze()
-    print('\n* Finished LMPC (%0.2f seconds)*'%t)
+    print('* Finished LMPC (%0.2f seconds)*       '%t)
     print('Total Lane Boundary Violation: %0.2f'%cum_slack_violation) 
     if show_stats:
         print('n_step = %d'%n_step)
@@ -620,80 +629,46 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats
         
     return x_list, u_list, q_list
 
-def check_affine_feasibility(drone,x_data,u_data):
-    errs = []
-    for i in range(len(x_data)-1):
-        test = drone.A_affine @ x_data[i] + drone.B_affine @ u_data[i] + drone.C_affine.T
-        err = np.linalg.norm(test - x_data[i+1])
-        errs.append(err)
-    errs = np.array(errs)
+
+
+def plot_trajectory(x_data, u_data, track):
+    fig = plt.figure()
+    #axs = plt.subplots(10,2)
     
-    print('feasibility error: %f'%np.max(errs))
-    if np.max(errs) > 1e-3:
-        return False
-    else:
-        return True
+    
+    x_bounds = np.zeros((x_data.shape[0],2))
+    y_bounds = np.zeros((x_data.shape[0],2))
+    z_bounds = np.zeros((x_data.shape[0],2))
+    
+    
+    '''for i in range(x_data.shape[0]):
+        p = np.array([x_data[i,0],x_data[i,4],x_data[i,8]])
+        bl,bh = track.get_local_limits(p)
         
-'''def run_ugo_LMPC(drone, track, x_data, u_data, q_data):
-    N = 14                                    # Horizon length
-    n = 10;   d = 3                            # State and Input dimension
-    x0 = np.zeros((n))       # Initial condition
+        x_bounds[i,0] = bl[0]
+        x_bounds[i,1] = bh[0]
+        y_bounds[i,0] = bl[1]
+        y_bounds[i,1] = bh[1]
+        z_bounds[i,0] = bl[2]
+        z_bounds[i,1] = bh[2]'''
     
-    dt = 0.05
+    t_list = np.arange(x_data.shape[0]) * 0.05
     
-    vt = 0.8
-    
-    # add track to drone class for usage by LMPC controller
-    drone.map = track
-    drone.map.TrackLength = drone.map.track_length
-    drone.map.halfWidth = drone.map
-    
-    # Initialize controller parameters
-    mpcParam, ltvmpcParam = ugo_parameters.initMPCParams(n, d, N, vt)
-    numSS_it, numSS_Points, Laps, TimeLMPC, QterminalSlack, lmpcParameters = ugo_parameters.initLMPCParams(track, N)
-    
-    
-    
-    # Initialize Controller
-    lmpcParameters.timeVarying     = True 
-    lmpc = ugo_controller.LMPC(numSS_Points, numSS_it, QterminalSlack, lmpcParameters, drone)
-    
-    lmpc.addTrajectory( x_data, u_data, None)
-    
-    def run_ugo_LMPC_lap(x0):
-        x = x0.copy()
-        itr = 0
-        done = False
-        while not done:
-            lmpc.solve(x)
-            u = lmpc.uPred[0,:].copy()
-            lmpc.addPoint(x, u)
-            x = drone.A @ x + drone.B @ u
-            
-            if itr % 10 == 0:
-                fig.canvas.restore_region(bg)
-                
-                
-                loc[0].set_data(x[0],x[4])
-                loc[0].set_3d_properties(x[8])
-                
-                fig.canvas.draw()
-                fig.canvas.flush_events()
-            itr += 1
+    for j in range(10):
+        ax = fig.add_subplot(10,2,j*2+1)
+        ax.plot(t_list, x_data[:,j])
         
-        
-        
-    # Run sevaral laps
-    for it in range(10):
-        # Simulate controller
-        x_data, u_data, xF = LMPCsimulator.sim(xS,  lmpc)
-        # Add trajectory to controller
-        lmpc.addTrajectory( x_data, u_data, None)
-        # lmpcpredictiveModel.addTrajectory(np.append(xLMPC,np.array([xS[0]]),0),np.append(uLMPC, np.zeros((1,2)),0))
-        #lmpcpredictiveModel.addTrajectory(xLMPC,uLMPC)
-        print("Completed lap: ", it, " in ", np.round(lmpc.Qfun[it][0]*dt, 2)," seconds")
-    print("===== LMPC terminated")'''
+    for j in range(3):
+        ax = fig.add_subplot(10,2,j*2+2)
+        ax.plot(t_list, u_data[:,j])
     
+        
+    #axs[1][1][0].fill_between(t_list, x_bounds[:,1], x_bounds[:,0], alpha = 0.3)
+    
+    
+    plt.show()
+    return
+        
     
     
 def main():
@@ -709,6 +684,8 @@ def main():
     else:
         x_lqr, u_lqr, q_lqr = run_LQR_lap(drone, track, show_plots = False)
         np.savez('lqr_data.npz', x  =x_lqr, u = u_lqr, q = q_lqr)
+    
+    
     
     lqr_raceline = GlobalRaceline(x_lqr, u_lqr, track, window = 1)
     
@@ -730,16 +707,42 @@ def main():
     else:
         lqr_raceline.p_window = 70
         lqr_raceline.window = 20
-        x_mpc, u_mpc, q_mpc = run_MPC(drone, track, lqr_raceline, show_plots = False)
+        x_mpc, u_mpc, q_mpc = run_MPC(drone, track, lqr_raceline, show_plots = False, show_stats = False)
         np.savez('mpc_data.npz', x  = x_mpc, u = u_mpc, q = q_mpc)
     
-    #x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_mpc, u_mpc, q_mpc, show_plots = False)
-    x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_lqr, u_lqr, q_lqr, show_plots = False)
-    for j in range(10):
-        x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_lmpc, u_lmpc, q_lmpc, show_plots = False, show_stats = False)
+    lmpc_laps = 30
+    if os.path.exists('lmpc_data.npz'):
+        data = np.load('lmpc_data.npz', allow_pickle = True)  
+        x_lmpc = data['x']
+        u_lmpc = data['u']
+        q_lmpc  = data['q']
+        t_lmpc  = data['t']
+    else:
+        t_lmpc = np.zeros(lmpc_laps)
+        x_lmpc = []
+        u_lmpc = []
+        q_lmpc = []
+        x,u,q = run_LMPC(drone, track, x_lqr, u_lqr, q_lqr, show_plots = False, show_stats = False)
         
-    #run_ugo_LMPC(drone,track, x_list, u_list, q_list)'''
-    
+        x_lmpc.append(x)
+        u_lmpc.append(u)
+        q_lmpc.append(q)
+        t_lmpc[0] = len(q) * 0.05
+        
+        for j in range(lmpc_laps - 1):
+            x,u,q = run_LMPC(drone, track, x_lmpc[-1], u_lmpc[-1], q_lmpc[-1], show_plots = False, show_stats = False)
+            x_lmpc.append(x)
+            u_lmpc.append(u)
+            q_lmpc.append(q)
+            t_lmpc[j+1] = len(q) * 0.05
+            
+        np.savez('lmpc_data.npz', x  = x_lmpc, u = u_lmpc, q = q_lmpc, t = t_lmpc)
+            
+    print('LQR Lap Time: %0.2f' % (0.05 * len(q_lqr)))
+    print('MPC Lap Time: %0.2f' % (0.05 * len(q_mpc)))
+    print('LMPC Lap Time:')
+    for j in range(lmpc_laps):
+        print('  Lap %d: %0.2f' % (j,t_lmpc[j]))
 
 if __name__ == '__main__':
     main()

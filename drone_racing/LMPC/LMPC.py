@@ -284,7 +284,6 @@ class MPCUtil():
         '''
         Safe set vectors and cost-to-go. If scaling is desired, it must be done before being passed here. 
         These can be updated using update()
-        
         '''
         assert ss_vecs.shape[0] == self.dim_x
         assert ss_vecs.shape[1] == self.num_ss
@@ -605,6 +604,7 @@ class MPCUtil():
             #self.track_boundary_idxs = np.argwhere(np.logical_and(self.osqp_A.indices >= self.boundary_start_row , self.osqp_A.indices < self.boundary_stop_row))
         
         
+        
         return
         
     
@@ -836,12 +836,6 @@ class MPCUtil():
             self.osqp_A.data[self.model_idxs] = model_data
             return
             
-            '''Ax = sparse.kron(sparse.eye(self.N+1),sparse.eye(self.dim_x)) + \
-                 sparse.kron(sparse.eye(self.N+1, k=-1), -self.A)               
-            Au = sparse.kron(sparse.vstack([sparse.csc_matrix((1, self.N)), sparse.eye(self.N)]), -self.B)
-            Aeq = sparse.hstack([Ax, Au])
-            
-            self.osqp_A[0:Aeq.shape[0], 0:Aeq.shape[1]] = Aeq'''
         
         self.model_update_flag = False
         return
@@ -903,6 +897,8 @@ class MPCUtil():
         print_str += '  Output Cost Offset  : %s\n'% self.output_cost_offset_mode
         print_str += '}'
         return print_str
+    
+    
     
 class DroneMPCUtil(MPCUtil):
     '''
@@ -1327,7 +1323,6 @@ def main():
     
     plt.show()
     
-    #pdb.set_trace()
     
     return
 

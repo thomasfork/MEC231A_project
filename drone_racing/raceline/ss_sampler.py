@@ -48,6 +48,7 @@ class SSSampler():
             wrapped_idxs = idxs >= self.x_data[i].shape[1]
             idxs[wrapped_idxs] -= self.x_data[i].shape[1]
             
+            
             ss_x = self.x_data[i][:,idxs]
             ss_q = self.q_data[i][idxs]
             if np.any(wrapped_idxs):
@@ -57,6 +58,11 @@ class SSSampler():
             self.last_idx = idx
             self.last_ss_x = ss_x
             self.last_ss_q = ss_q
+            
+            
+            #if idx + 5 > self.x_data[i].shape[1]:
+            #    pdb.set_trace()
+                
         return ss_x,ss_q
         
         

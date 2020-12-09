@@ -193,9 +193,9 @@ class DroneTrack():
         return s, e_y, e_z, e_th, e_phi
 
     
-    def linearize_boundary_constraints(self, p_interp, margin = 0.25):
+    def linearize_boundary_constraints(self, p_interp, margin = 0.0):
         '''
-        linearize track constraints about an x,y,z point
+        linearize track constraints about an [x,y,z] point
         returns A, bu, bl such that the track constraints are of the form
         bl <= A @ p <= bu 
         
@@ -215,6 +215,8 @@ class DroneTrack():
         b = np.array([10,self.w_y/2 - margin, self.w_z/2 - margin])  #"10" is a dummy value for a constraint bound in the direction of the track 
         bl = -b + A @ p0
         bu =  b + A @ p0
+        
+        # bl <= A*p <= bu, p = [x,y,z]
         
         return bl, A, bu
     
@@ -293,6 +295,21 @@ class DroneTrack():
         ax.set_ylim(-20,140)
         ax.set_zlim(-80,80)    
         
+    
+    def get_local_limits(self,p):
+        '''
+        get x,y,z max and min bounds at the path length corresponding to p
+        useful as a helper function for plotting
+        '''  
+        s,_,_,_,_ = self.global_to_local_waypoint(p, 0, 0)
+        d_h = self.w_y/2
+        d_v = self.w_z/2
+        
+        
+        pl = self.local_to_global_curvillinear(s,-d_h,-d_v,0,0,)[0]
+        ph = self.local_to_global_curvillinear(s, d_h, d_v,0,0,)[0]
+        
+        return np.min([pl,ph],axis = 0), np.max([pl,ph],axis = 0)
         
 
 
@@ -339,21 +356,24 @@ def test_constraint_linearization():
         check = np.all(bl - 1e-9 <= A @ p1) and np.all(A @ p1 <= bu  +1e-9)
         errors.append( not check)
         
-    print('constraint linearization errors: %d'%np.sum(np.array(errors)))
+    #print('constraint linearization errors: %d'%np.sum(np.array(errors)))
         
 def main():
     track = DroneTrack()
     track.load_default()
-    fig = plt.figure(figsize = (14,7))
-    ax = fig.gca(projection='3d')
-    track.plot_map(ax)
-    plt.show()
+    #fig = plt.figure(figsize = (14,7))
+    #ax = fig.gca(projection='3d')
+    #track.plot_map(ax)
+    #plt.show()
+    
+    p = np.array([80,70,8])
+    track.get_local_limits(p)
     return       
         
     
     
 if __name__ == '__main__':
-    #main()
+    main()
     #test_reconstruction_accuracy()
-    test_constraint_linearization()
+    #test_constraint_linearization()
         
