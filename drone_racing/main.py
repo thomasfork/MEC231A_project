@@ -438,13 +438,14 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats
     # lmpc works with affine models rather than linearized affine models so strip the extra datapoint if present
     x_data = x_data[:,:dim_x]
     
+    # tuning: P,Q,R,SSSample 
     Q = np.eye(dim_x) 
     R = np.eye(dim_u) * 0.1
     dR = R * 0 
-    P = Q
+    P = Q # can be tuned 
     
     
-    Q_mu = 1000000 * np.eye(dim_x) 
+    Q_mu = 1000000 * np.eye(dim_x)  # soft constraint
     Q_eps = 100 * np.eye(N) 
     b_eps = np.zeros((N,1))
     
@@ -464,6 +465,7 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats
     x0 = np.zeros((dim_x,1))
     uf = np.array([[0,0,14]]).T
     
+    # another tuning 
     ss_sampler = SSSampler(num_ss,x_data, u_data, q_data, q_scaling = 10000, drone = drone)
     
     ss_vecs, ss_q = ss_sampler.update(x0)
