@@ -693,7 +693,7 @@ def check_affine_feasibility(drone,x_data,u_data):
     
     
     
-def main():
+def main(show_plots):
     drone = drone_simulator.DroneSim()
     track = dt.DroneTrack()
     track.load_default()
@@ -704,7 +704,7 @@ def main():
         u_lqr = data['u']
         q_lqr = data['q']
     else:
-        x_lqr, u_lqr, q_lqr = run_LQR_lap(drone, track, show_plots = False)
+        x_lqr, u_lqr, q_lqr = run_LQR_lap(drone, track,show_plots)
         np.savez('lqr_data.npz', x  =x_lqr, u = u_lqr, q = q_lqr)
     
     lqr_raceline = GlobalRaceline(x_lqr, u_lqr, track, window = 1)
@@ -715,7 +715,7 @@ def main():
         u_lqr_raceline = data['u']
         q_lqr_raceline = data['q']
     else:
-        x_lqr_raceline, u_lqr_raceline, q_lqr_raceline = run_LQR_raceline(drone, track, lqr_raceline, show_plots = False)
+        x_lqr_raceline, u_lqr_raceline, q_lqr_raceline = run_LQR_raceline(drone, track, lqr_raceline, show_plots)
         np.savez('lqr_raceline_data.npz', x  = x_lqr_raceline, u = u_lqr_raceline, q = q_lqr_raceline)
     
     
@@ -727,16 +727,16 @@ def main():
     else:
         lqr_raceline.p_window = 70
         lqr_raceline.window = 20
-        x_mpc, u_mpc, q_mpc = run_MPC(drone, track, lqr_raceline, show_plots = False)
+        x_mpc, u_mpc, q_mpc = run_MPC(drone, track, lqr_raceline, show_plots)
         np.savez('mpc_data.npz', x  = x_mpc, u = u_mpc, q = q_mpc)
     
-    x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_mpc, u_mpc, q_mpc, show_plots = False)
+    x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_mpc, u_mpc, q_mpc, show_plots)
     #x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_lqr, u_lqr, q_lqr, show_plots = False)
     for j in range(3):
-        x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_lmpc, u_lmpc, q_lmpc, show_plots = False, show_stats = False)
+        x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_lmpc, u_lmpc, q_lmpc, show_plots, show_stats = False)
         
     #run_ugo_LMPC(drone,track, x_list, u_list, q_list)'''
     
 
 if __name__ == '__main__':
-    main()
+    main(show_plots = True)
