@@ -423,7 +423,7 @@ def run_MPC(drone, track, raceline, show_plots = True, show_stats = True):
 
 
 
-def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats = True, n_step = 1):
+def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats = True, n_step = 1, rate = 0.01):
     '''
     show_plots - will plot drone and drone track while running a lap
     show_stats - will print average solve time, update time, etc.. after finishing lap
@@ -440,7 +440,7 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats
     
     # tuning: P,Q,R,SSSample 
     Q = np.eye(dim_x) 
-    R = np.eye(dim_u) * 0.1
+    R = np.eye(dim_u) * rate
     dR = R * 0 
     P = Q # can be tuned 
     
@@ -630,73 +630,13 @@ def check_affine_feasibility(drone,x_data,u_data):
         return False
     else:
         return True
-        
-'''def run_ugo_LMPC(drone, track, x_data, u_data, q_data):
-    N = 14                                    # Horizon length
-    n = 10;   d = 3                            # State and Input dimension
-    x0 = np.zeros((n))       # Initial condition
+           
     
-    dt = 0.05
-    
-    vt = 0.8
-    
-    # add track to drone class for usage by LMPC controller
-    drone.map = track
-    drone.map.TrackLength = drone.map.track_length
-    drone.map.halfWidth = drone.map
-    
-    # Initialize controller parameters
-    mpcParam, ltvmpcParam = ugo_parameters.initMPCParams(n, d, N, vt)
-    numSS_it, numSS_Points, Laps, TimeLMPC, QterminalSlack, lmpcParameters = ugo_parameters.initLMPCParams(track, N)
-    
-    
-    
-    # Initialize Controller
-    lmpcParameters.timeVarying     = True 
-    lmpc = ugo_controller.LMPC(numSS_Points, numSS_it, QterminalSlack, lmpcParameters, drone)
-    
-    lmpc.addTrajectory( x_data, u_data, None)
-    
-    def run_ugo_LMPC_lap(x0):
-        x = x0.copy()
-        itr = 0
-        done = False
-        while not done:
-            lmpc.solve(x)
-            u = lmpc.uPred[0,:].copy()
-            lmpc.addPoint(x, u)
-            x = drone.A @ x + drone.B @ u
-            
-            if itr % 10 == 0:
-                fig.canvas.restore_region(bg)
-                
-                
-                loc[0].set_data(x[0],x[4])
-                loc[0].set_3d_properties(x[8])
-                
-                fig.canvas.draw()
-                fig.canvas.flush_events()
-            itr += 1
-        
-        
-        
-    # Run sevaral laps
-    for it in range(10):
-        # Simulate controller
-        x_data, u_data, xF = LMPCsimulator.sim(xS,  lmpc)
-        # Add trajectory to controller
-        lmpc.addTrajectory( x_data, u_data, None)
-        # lmpcpredictiveModel.addTrajectory(np.append(xLMPC,np.array([xS[0]]),0),np.append(uLMPC, np.zeros((1,2)),0))
-        #lmpcpredictiveModel.addTrajectory(xLMPC,uLMPC)
-        print("Completed lap: ", it, " in ", np.round(lmpc.Qfun[it][0]*dt, 2)," seconds")
-    print("===== LMPC terminated")'''
-    
-    
-    
-def main(show_plots):
+def main(show_plots = False,laps = 3, tuning_rate = 0.01):
     drone = drone_simulator.DroneSim()
     track = dt.DroneTrack()
     track.load_default()
+    
     
     if os.path.exists('lqr_data.npz'):
         data = np.load('lqr_data.npz')
@@ -730,13 +670,14 @@ def main(show_plots):
         x_mpc, u_mpc, q_mpc = run_MPC(drone, track, lqr_raceline, show_plots)
         np.savez('mpc_data.npz', x  = x_mpc, u = u_mpc, q = q_mpc)
     
-    x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_mpc, u_mpc, q_mpc, show_plots)
+    x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_mpc, u_mpc, q_mpc, show_plots, rate = tuning_rate)
     #x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_lqr, u_lqr, q_lqr, show_plots = False)
-    for j in range(3):
-        x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_lmpc, u_lmpc, q_lmpc, show_plots, show_stats = False)
+    for j in range(laps):
+        x_lmpc, u_lmpc, q_lmpc = run_LMPC(drone, track, x_lmpc, u_lmpc, q_lmpc, show_plots, show_stats = False, rate= tuning_rate)
         
     #run_ugo_LMPC(drone,track, x_list, u_list, q_list)'''
     
 
 if __name__ == '__main__':
-    main(show_plots = True)
+    
+    main(show_plots = False, laps = 3, tuning_rate = 0.01)
