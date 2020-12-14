@@ -1,17 +1,13 @@
 import numpy as np
 import scipy
 from matplotlib import pyplot as plt
+import matplotlib.animation as animation
 import pdb
 
 from sim import drone_simulator
 from track import track as dt
 
 from LMPC import LMPC
-'''
-from LMPC.local_linearization import PredictiveModel
-from LMPC import initControllerParameters as ugo_parameters
-from LMPC import PredictiveModel as ugo_model
-from LMPC import PredictiveControllers as ugo_controller'''
 
 from raceline.raceline import GlobalRaceline
 from raceline.ss_sampler import SSSampler
@@ -425,11 +421,12 @@ def run_MPC(drone, track, raceline, show_plots = True, show_stats = True):
 
 
 
-def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats = True, n_step = 1):
+def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats = True, n_step = 1, FPV = False):
     '''
     show_plots - will plot drone and drone track while running a lap
     show_stats - will print average solve time, update time, etc.. after finishing lap
     n_step     - number of planned steps to execute after each solution
+    FPV        - render in first person view and save to video file
     '''
     print('* Starting LMPC *')
     N = 30
@@ -503,7 +500,21 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats
                        m.predicted_x[:,8], '-b', linewidth = 2)
         tar = ax.plot([0],[0],[0], 'or',markersize = 12)
         ss = ax.plot(ss_vecs[0,:].T, ss_vecs[4,:].T, ss_vecs[8,:].T,'og', alpha = 0.2)
-    
+        if FPV:
+            plt.axis('off')
+            ax.grid(False)
+
+            # Hide axes ticks
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.set_zticks([])
+            
+            writer = animation.FFMpegWriter(fps = 20)
+            #writer.setup(fig, 'LMPC_movie', dpi = 400)
+            writer.setup(fig, "lmpc_fpv.mp4", 100)
+            
+            
+            
     t_list = []
     x_list = []
     u_list = []
@@ -577,9 +588,17 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats
         t_convert.append(t3-t2)
         t_ss.append(t4-t3)
         
-        if itr % (10*n_step) == 0 and show_plots:
+        redraw = 1 if FPV else 10
+        
+        if itr % (redraw*n_step) == 0 and show_plots:
             fig.canvas.restore_region(bg)
             
+            if FPV:
+                phi = ((np.arctan2(x[5],x[1]) + np.pi) * 180 / np.pi) .__float__()
+                ax.view_init(elev = 35, azim = phi) 
+                ax.set_xlim3d(x[0] - 10, x[0] + 10)
+                ax.set_ylim3d(x[4] - 10, x[4] + 10)
+                ax.set_zlim3d(x[8] - 10, x[8] + 10)
             
             loc[0].set_data(x[0],x[4])
             loc[0].set_3d_properties(x[8]) 
@@ -595,7 +614,9 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats
             
             fig.canvas.draw()
             fig.canvas.flush_events()
-                
+            
+            if FPV:
+                writer.grab_frame()
         
         
         if not track.inside_track(p):
@@ -609,6 +630,10 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats
         elif lap_halfway:
             if s < 10:
                 lap_done = True
+    
+    if FPV:
+        writer.finish()
+    
         
     x_list = np.array(x_list).squeeze()
     q_list = np.array(t_list).squeeze()
@@ -737,6 +762,8 @@ def main():
             t_lmpc[j+1] = len(q) * 0.05
             
         np.savez('lmpc_data.npz', x  = x_lmpc, u = u_lmpc, q = q_lmpc, t = t_lmpc)
+    
+    run_LMPC(drone, track, x_lmpc[-1], u_lmpc[-1], q_lmpc[-1], show_plots = True, show_stats = False, FPV = True)
             
     print('LQR Lap Time: %0.2f' % (0.05 * len(q_lqr)))
     print('MPC Lap Time: %0.2f' % (0.05 * len(q_mpc)))
