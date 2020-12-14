@@ -649,7 +649,7 @@ class MPCUtil():
         self.use_local_constraints = True
         self.use_terminal_slack = True
         self.use_global_slack = False
-        self.use_local_slack = False
+        self.use_local_slack = True
         
         self.setup()
         return

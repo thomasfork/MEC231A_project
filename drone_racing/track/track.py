@@ -2,6 +2,7 @@ import numpy as np
 from matplotlib import pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 from dataclasses import dataclass, field
+import scipy.optimize
 import pdb
 
 pi = np.pi
@@ -69,6 +70,9 @@ class DroneTrack():
         self.generate_track_waypoints()
     
     def load_default(self):
+        '''
+        simple xy track with one up/down z curve
+        '''
         self.cl_segs = [np.array([50,10*pi/2,100,10*pi, 60, 15*pi/2, 30*np.sqrt(2), 15*pi/2, 10, 5*pi, 10, 5*pi, 60, 5*pi, \
                                 10 ,2.5*pi,15,2.5*pi,80-70/np.sqrt(2), 2.5*pi,15, 2.5*pi,10,5*pi,50]), 
                         np.array([0,10,0,10,0,-10,0,-10,0,10,0,10,0,10,\
@@ -79,6 +83,32 @@ class DroneTrack():
         self.w_y = 15
         self.w_z = 15
         self.generate_track_waypoints()
+        return
+    
+    def load_default2(self):
+        '''
+        more complicated track
+        '''
+        
+        # used to compute angle and length for sloped descent portion
+        def F(x):
+            return np.array([20*np.sin(x[0]) + x[1]*np.cos(x[0]) + 20*np.sin(x[0]) - 90, 40*(1-np.cos(x[0])) +x[1]*np.sin(x[0]) - 40])
+        th,L = scipy.optimize.newton_krylov(F,[0.5,90],f_tol = 1e-14)
+        ds = th * 20 
+        
+        self.cl_segs = [np.array([50,20*pi,40,10*pi,10,20*pi,5*pi,40, 20*pi,20,5*pi,10, 10*pi, 40, 10*pi, 60,
+                                    5*pi, 20, 20*pi+ds, L, 20*pi+ds, 10, 5*pi, 30]), 
+                        np.array([0,20,0,10,0,20,           -10,0    , 20,  0 , -10,  0, 20,  0,   20,   0,
+                                    -10, 0,   20,   0,  -20,0,-10, 0]),
+                        np.array([0,1,0,0,0,1,               0,0     , 1   ,0  ,0   , 0, 1,   0,    1,   0,
+                                    0,  0,   1,   0,   1,0,0, 0])]
+                                
+                                
+        
+        self.w_y = 15
+        self.w_z = 15
+        self.generate_track_waypoints()
+        return
         
         
     def generate_track_waypoints(self,n_segs = 5000):     # grid the track space to generate a fast approximate way to covert global coordinates to local coordinates
@@ -90,7 +120,7 @@ class DroneTrack():
         self.waypoints = []
         for s in s_interp: 
             p0, th, phi= self.local_to_global_curvillinear(s, 0, 0, 0, 0)
-            n_t, n_h, n_v = self.calc_curvillinar_unit_vectors(th, phi)
+            n_t, n_h, n_v = self.calc_curvillinear_unit_vectors(th, phi)
             self.waypoints.append([s,p0,np.array([n_t,n_h,n_v]), th, phi])
         
         self.waypoint_path_lengths = np.array([way[0] for way in self.waypoints])
@@ -145,25 +175,56 @@ class DroneTrack():
                 
             current_s += delta_s
             r = self.cl_segs[1][i]
+            
+            
+            n_t, n_h, n_v = self.calc_curvillinear_unit_vectors(current_th, current_phi)
+            '''
+            n_t = np.array([np.cos(th) * np.cos(phi), 
+                        np.sin(th) * np.cos(phi),
+                        np.sin(phi)])
+        n_h = np.array([-np.sin(th) , 
+                        np.cos(th),
+                        0])
+        n_v = np.array([-np.cos(th) * np.sin(phi), 
+                        -np.sin(th) * np.sin(phi),
+                        np.cos(phi)])
+            '''
+            
                 
             if self.cl_segs[1][i] == 0:   #straight segment
-                current_p += delta_s * np.array([np.cos(current_th) * np.cos(current_phi),np.sin(current_th) * np.cos(current_phi),np.sin(current_phi)])
+                #current_p += delta_s * np.array([np.cos(current_th) * np.cos(current_phi),np.sin(current_th) * np.cos(current_phi),np.sin(current_phi)])
+                current_p += delta_s * n_t
+                
             elif not self.cl_segs[2][i]:  #curving in x-y plane
                 s = delta_s
-                p_c = current_p + r * np.array([-np.sin(current_th), np.cos(current_th), 0])
-                current_p = p_c + r * np.array([np.sin(current_th + s/r), -np.cos(current_th + s/r), 0])
-                current_th += s/r
+                p_c = current_p + r * n_h #np.array([-np.sin(current_th), np.cos(current_th), 0])
+                #current_p = p_c + r * np.array([np.sin(current_th + s/r), -np.cos(current_th + s/r), 0])
+                
+                if np.cos(current_phi) > 0:
+                    current_th += s/r
+                else:
+                    current_th -= s/r
+                
+                n_t, n_h, n_v = self.calc_curvillinear_unit_vectors(current_th, current_phi)
+                
+                current_p = p_c - r * n_h
+                
             else:                         #curving up/down (z and current horizontal direction)
                 s = delta_s
-                p_c = current_p + r * np.array([-np.cos(current_th)*np.sin(current_phi)      , -np.sin(current_th)*np.sin(current_phi)      , np.cos(current_phi)])  
-                dc =            - r * np.array([-np.cos(current_th)*np.sin(current_phi + s/r), -np.sin(current_th)*np.sin(current_phi + s/r), np.cos(current_phi + s/r)])
-                current_p = p_c +dc
+                p_c = current_p + r * n_v #np.array([-np.cos(current_th)*np.sin(current_phi)      , -np.sin(current_th)*np.sin(current_phi)      , np.cos(current_phi)])  
+                #dc =            - r * np.array([-np.cos(current_th)*np.sin(current_phi + s/r), -np.sin(current_th)*np.sin(current_phi + s/r), np.cos(current_phi + s/r)])
+                #if s > 60: pdb.set_trace()
+                #current_p = p_c +dc
                 current_phi += s/r
+                
+                n_t, n_h, n_v = self.calc_curvillinear_unit_vectors(current_th, current_phi)
+                dc = - r * n_v
+                current_p = p_c +dc
             
             i += 1
             
         #tangent, horizontal, and vertical unit vectors at cl_segs[i]
-        n_t, n_h, n_v = self.calc_curvillinar_unit_vectors(current_th, current_phi)
+        n_t, n_h, n_v = self.calc_curvillinear_unit_vectors(current_th, current_phi)
                         
         current_p += e_y * n_h + e_z * n_v                
         
@@ -225,7 +286,7 @@ class DroneTrack():
         
         return not ( abs(ey) > self.w_y/2 or abs(ez) > self.w_z/2 ) 
         
-    def calc_curvillinar_unit_vectors(self, th, phi):
+    def calc_curvillinear_unit_vectors(self, th, phi):
         n_t = np.array([np.cos(th) * np.cos(phi), 
                         np.sin(th) * np.cos(phi),
                         np.sin(phi)])
@@ -247,7 +308,7 @@ class DroneTrack():
     def s2idx(self,s):
         return np.argmax(self.mod_s(s) < self.waypoint_path_lengths) -1     
         
-    def plot_map(self,ax, n_segs = 1000):
+    def plot_map(self,ax, n_segs = 1000, show_proj = True):
         
         s_interp = np.linspace(0,self.track_length-1e-3,n_segs)
         
@@ -271,11 +332,12 @@ class DroneTrack():
         line_bl = np.array(line_bl)  
         line_ur = np.array(line_ur)  
         line_br = np.array(line_br)   
-    
-        proj_outline_inner = ax.plot(line_bc[:,0], line_bc[:,1], -self.w_z/2, '--k')
-        proj_outline_left  = ax.plot(line_bl[:,0], line_bl[:,1], -self.w_z/2, 'k')
-        proj_outline_right = ax.plot(line_br[:,0], line_br[:,1], -self.w_z/2, 'k')
-        proj_outline_start = ax.plot([line_br[0,0],line_bl[0,0]],
+        
+        if show_proj:
+            proj_outline_inner = ax.plot(line_bc[:,0], line_bc[:,1], -self.w_z/2, '--k')
+            proj_outline_left  = ax.plot(line_bl[:,0], line_bl[:,1], -self.w_z/2, 'k')
+            proj_outline_right = ax.plot(line_br[:,0], line_br[:,1], -self.w_z/2, 'k')
+            proj_outline_start = ax.plot([line_br[0,0],line_bl[0,0]],
                                      [line_br[0,1],line_bl[0,1]], -self.w_z/2,'r')
                                      
         #ax.set_aspect('equal', 'box')
@@ -360,14 +422,14 @@ def test_constraint_linearization():
         
 def main():
     track = DroneTrack()
-    track.load_default()
-    #fig = plt.figure(figsize = (14,7))
-    #ax = fig.gca(projection='3d')
-    #track.plot_map(ax)
-    #plt.show()
+    track.load_default2()
+    fig = plt.figure(figsize = (14,7))
+    ax = fig.gca(projection='3d')
+    track.plot_map(ax, show_proj = False)
+    plt.show()
     
-    p = np.array([80,70,8])
-    track.get_local_limits(p)
+    #p = np.array([80,70,8])
+    #track.get_local_limits(p)
     return       
         
     

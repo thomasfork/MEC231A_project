@@ -699,7 +699,8 @@ def plot_trajectory(x_data, u_data, track):
 def main():
     drone = drone_simulator.DroneSim()
     track = dt.DroneTrack()
-    track.load_default()
+    track.load_default2()
+    #track.load_default()
     
     if os.path.exists('lqr_data.npz'):
         data = np.load('lqr_data.npz')
@@ -747,7 +748,7 @@ def main():
         x_lmpc = []
         u_lmpc = []
         q_lmpc = []
-        x,u,q = run_LMPC(drone, track, x_lqr, u_lqr, q_lqr, show_plots = False, show_stats = False)
+        x,u,q = run_LMPC(drone, track, x_lqr, u_lqr, q_lqr, show_plots = False, show_stats = True)
         
         x_lmpc.append(x)
         u_lmpc.append(u)
