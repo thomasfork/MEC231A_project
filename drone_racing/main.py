@@ -702,8 +702,8 @@ def plot_trajectory(x_data, u_data, track):
 def main():
     drone = drone_simulator.DroneSim()
     track = dt.DroneTrack()
+    #track.load_default2()
     track.load_default()
-    #track.load_default()
     
     if os.path.exists('lqr_data.npz'):
         data = np.load('lqr_data.npz')
