@@ -1,10 +1,10 @@
 import numpy as np
 import scipy
 from matplotlib import pyplot as plt
-# import matplotlib 
-# matplotlib.use('TkAgg')
-# import matplotlib.pyplot as plt
-import matplotlib.animation as animation
+import matplotlib 
+matplotlib.use('TkAgg')
+import matplotlib.pyplot as plt
+#import matplotlib.animation as animation
 import pdb
 
 from sim import drone_simulator
@@ -736,7 +736,7 @@ def main():
     else:
         lqr_raceline.p_window = 70
         lqr_raceline.window = 20
-        x_mpc, u_mpc, q_mpc = run_MPC(drone, track, lqr_raceline, show_plots = False, show_stats = False)
+        x_mpc, u_mpc, q_mpc = run_MPC(drone, track, lqr_raceline, show_plots = False, show_stats = True)
         np.savez('mpc_data.npz', x  = x_mpc, u = u_mpc, q = q_mpc)
     
     lmpc_laps = 30
@@ -767,7 +767,7 @@ def main():
             
         np.savez('lmpc_data.npz', x  = x_lmpc, u = u_lmpc, q = q_lmpc, t = t_lmpc)
     
-    run_LMPC(drone, track, x_lmpc[-1], u_lmpc[-1], q_lmpc[-1], show_plots = False, show_stats = False, FPV = False)
+    run_LMPC(drone, track, x_lmpc[-1], u_lmpc[-1], q_lmpc[-1], show_plots = False, show_stats = True, FPV = False)
             
     print('LQR Lap Time: %0.2f' % (0.05 * len(q_lqr)))
     print('MPC Lap Time: %0.2f' % (0.05 * len(q_mpc)))
