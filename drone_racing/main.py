@@ -1,6 +1,9 @@
 import numpy as np
 import scipy
 from matplotlib import pyplot as plt
+# import matplotlib 
+# matplotlib.use('TkAgg')
+# import matplotlib.pyplot as plt
 import matplotlib.animation as animation
 import pdb
 
@@ -440,7 +443,7 @@ def run_LMPC(drone, track, x_data, u_data, q_data, show_plots = True, show_stats
     Q = np.eye(dim_x) * 0
     R = np.eye(dim_u) * 0.1  *0
     dR = R * 0 
-    P = Q * 0
+    P = Q * 0 
     
     
     Q_mu = 1000000 * np.eye(dim_x) 
@@ -702,8 +705,8 @@ def plot_trajectory(x_data, u_data, track):
 def main():
     drone = drone_simulator.DroneSim()
     track = dt.DroneTrack()
-    track.load_default2()
-    #track.load_default()
+    #track.load_default2()
+    track.load_default()
     
     if os.path.exists('lqr_data.npz'):
         data = np.load('lqr_data.npz')
@@ -737,7 +740,7 @@ def main():
     else:
         lqr_raceline.p_window = 70
         lqr_raceline.window = 20
-        x_mpc, u_mpc, q_mpc = run_MPC(drone, track, lqr_raceline, show_plots = False, show_stats = False)
+        x_mpc, u_mpc, q_mpc = run_MPC(drone, track, lqr_raceline, show_plots = False, show_stats = True)
         np.savez('mpc_data.npz', x  = x_mpc, u = u_mpc, q = q_mpc)
     
     lmpc_laps = 30
@@ -768,7 +771,7 @@ def main():
             
         np.savez('lmpc_data.npz', x  = x_lmpc, u = u_lmpc, q = q_lmpc, t = t_lmpc)
     
-    run_LMPC(drone, track, x_lmpc[-1], u_lmpc[-1], q_lmpc[-1], show_plots = True, show_stats = False, FPV = True)
+    run_LMPC(drone, track, x_lmpc[-1], u_lmpc[-1], q_lmpc[-1], show_plots = False, show_stats = True, FPV = False)
             
     print('LQR Lap Time: %0.2f' % (0.05 * len(q_lqr)))
     print('MPC Lap Time: %0.2f' % (0.05 * len(q_mpc)))
