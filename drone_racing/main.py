@@ -679,6 +679,9 @@ def plot_trajectory(x_data, u_data, track):
     
     t_list = np.arange(x_data.shape[0]) * 0.05
     
+    #points = np.array([x[0,4,8] for x in x_data])
+    #s_list = np.array([track.global_to_local(point,0,0) for point in points]) 
+    
     for j in range(10):
         ax = fig.add_subplot(10,2,j*2+1)
         ax.plot(t_list, x_data[:,j])
@@ -712,6 +715,7 @@ def main():
         np.savez('lqr_data.npz', x  =x_lqr, u = u_lqr, q = q_lqr)
     
     
+    pdb.set_trace()
     
     lqr_raceline = GlobalRaceline(x_lqr, u_lqr, track, window = 1)
     
@@ -727,7 +731,7 @@ def main():
     
     if os.path.exists('mpc_data.npz'):
         data = np.load('mpc_data.npz')
-        x_mpc = data['x']
+        x_mpc = data['x']  #[x,vx,th1,dth2,y,vy,th2,dth2,z,dz]
         u_mpc = data['u']
         q_mpc = data['q']
     else:
