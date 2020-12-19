@@ -718,8 +718,6 @@ def main():
         np.savez('lqr_data.npz', x  =x_lqr, u = u_lqr, q = q_lqr)
     
     
-    pdb.set_trace()
-    
     lqr_raceline = GlobalRaceline(x_lqr, u_lqr, track, window = 1)
     
     if os.path.exists('lqr_raceline_data.npz'):
